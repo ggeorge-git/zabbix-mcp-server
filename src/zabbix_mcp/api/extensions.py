@@ -25,6 +25,7 @@ They are registered as MCP tools directly via MCPServer decorators in server.py.
 from __future__ import annotations
 
 import base64
+
 # from curses.ascii import isdigit
 import json
 import logging
@@ -1024,8 +1025,9 @@ def problem_active_get(
 
         search_query = kwargs.get("search") or kwargs.get("name")
         if search_query:
-            params["search"] = {"name": str(search_query)}
-            params["searchWildcardsEnabled"] = True
+            search_query = str(search_query).lower()
+        else:
+            search_query = None
 
         raw_time_from = kwargs.get("time_from")
         if raw_time_from is not None:
@@ -1047,28 +1049,41 @@ def problem_active_get(
 
         enriched = []
         zone = resolve_zone(client_manager, server_name)
-        for p in kept[:limit]:
+        for p in kept:
+            problem_name = p.get("name", "")
+
+            # If the user requested a search, check if the keyword matches the problem name
+            if search_query and search_query not in problem_name.lower():
+                continue  # Skip this problem because it doesn't match our keyword
+
             tid = str(p.get("objectid", ""))
             sev = str(p.get("severity", "0"))
             host_info = host_map.get(tid, {"host": "", "hostid": ""})
-            enriched.append({
-                "eventid": p.get("eventid", ""),
-                "triggerid": tid,
-                "host": host_info["host"],
-                "hostid": host_info["hostid"],
-                "name": p.get("name", ""),
-                "severity": sev,
-                "severity_label": _SEVERITY_LABELS.get(sev, sev),
-                "clock": p.get("clock", ""),
-                "time": _ts_to_human(p.get("clock"), zone),
-                "acknowledged": int(p.get("acknowledged", 0) or 0),
-            })
+            enriched.append(
+                {
+                    "eventid": p.get("eventid", ""),
+                    "triggerid": tid,
+                    "host": host_info["host"],
+                    "hostid": host_info["hostid"],
+                    "name": problem_name,
+                    "severity": sev,
+                    "severity_label": _SEVERITY_LABELS.get(sev, sev),
+                    "clock": p.get("clock", ""),
+                    "time": _ts_to_human(p.get("clock"), zone),
+                    "acknowledged": int(p.get("acknowledged", 0) or 0),
+                }
+            )
+
+        # Apply the limit here *after* we have filtered by search keyword
+        enriched_limited = enriched[:limit]
 
         return json.dumps(
             {
-                "problems": enriched,
-                "count": len(enriched),
-                "filtered_out": total - len(kept),
+                "problems": enriched_limited,
+                "count": len(enriched_limited),
+                "filtered_out": total
+                - len(kept)
+                + (len(enriched) - len(enriched_limited)),
             },
             ensure_ascii=False,
         )

@@ -1,0 +1,140 @@
+# ============================================================================
+# Zabbix MCP Server - UBI 10 test image
+# Python 3.12 / PDF reporting
+# ============================================================================
+
+FROM registry.access.redhat.com/ubi10/ubi:latest
+
+LABEL org.opencontainers.image.title="Zabbix MCP Server"
+LABEL org.opencontainers.image.description="MCP server for the complete Zabbix API"
+LABEL org.opencontainers.image.source="https://github.com/initMAX/zabbix-mcp-server"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+
+# ============================================================================
+# System dependencies
+# ============================================================================
+
+USER 0
+
+RUN dnf install -y \
+        python3 \
+        python3-pip \
+        python3-devel \
+        gcc \
+        cairo \
+        pango \
+        gdk-pixbuf2 \
+        libffi \
+        shared-mime-info \
+        ca-certificates \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# ============================================================================
+# Corporate CA
+# ============================================================================
+#
+# Put the corporate CA in the repository root:
+#
+#     oshkosh-root-ca.crt
+#
+# This is needed if your corporate proxy intercepts HTTPS.
+#
+# Remove these two lines temporarily if you only want to test whether
+# Python 3.12 can install the application.
+#
+
+COPY certs/company-ca-bundle.pem \
+    /etc/pki/ca-trust/source/anchors/company-ca-bundle.pem
+
+RUN update-ca-trust
+
+# ============================================================================
+# Build / install application
+# ============================================================================
+
+WORKDIR /build
+
+COPY . .
+
+RUN python3 -m venv /opt/zabbix-mcp/venv \
+    && /opt/zabbix-mcp/venv/bin/python -m pip install \
+        --upgrade \
+        pip \
+    && /opt/zabbix-mcp/venv/bin/pip install \
+        --no-cache-dir \
+        ".[reporting]"
+
+# ============================================================================
+# Runtime user
+# ============================================================================
+
+RUN useradd \
+        --system \
+        --shell /sbin/nologin \
+        --home-dir /opt/zabbix-mcp \
+        zabbix-mcp \
+    && mkdir -p \
+        /etc/zabbix-mcp \
+        /etc/zabbix-mcp/assets \
+        /etc/zabbix-mcp/tls \
+        /etc/zabbix-mcp/templates \
+        /var/lib/zabbix-mcp/reports \
+        /var/log/zabbix-mcp \
+    && cp config.example.toml \
+        /etc/zabbix-mcp/config.toml \
+    && sed -i \
+        's/^transport = "stdio"/transport = "http"/' \
+        /etc/zabbix-mcp/config.toml \
+    && chown -R zabbix-mcp:zabbix-mcp \
+        /opt/zabbix-mcp \
+        /etc/zabbix-mcp \
+        /var/lib/zabbix-mcp \
+        /var/log/zabbix-mcp \
+    && chmod 750 \
+        /etc/zabbix-mcp \
+        /etc/zabbix-mcp/tls \
+        /etc/zabbix-mcp/templates \
+        /var/lib/zabbix-mcp/reports \
+        /var/log/zabbix-mcp \
+    && chmod 600 \
+        /etc/zabbix-mcp/config.toml
+
+# ============================================================================
+# Environment
+# ============================================================================
+
+ENV PATH="/opt/zabbix-mcp/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1
+
+USER zabbix-mcp
+
+# ============================================================================
+# Ports
+# ============================================================================
+
+EXPOSE 8080
+EXPOSE 9090
+
+# ============================================================================
+# Health check
+# ============================================================================
+#
+# Your production configuration uses native TLS.
+# The certificate is intentionally not validated for this localhost check.
+#
+
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=5s \
+    --start-period=15s \
+    --retries=3 \
+    CMD python3 -c 'import ssl, urllib.request; ctx=ssl._create_unverified_context(); urllib.request.urlopen("https://127.0.0.1:8080/health", context=ctx, timeout=3)'
+
+# ============================================================================
+# Application
+# ============================================================================
+
+ENTRYPOINT ["/opt/zabbix-mcp/venv/bin/zabbix-mcp-server"]
+
+CMD ["--config", "/etc/zabbix-mcp/config.toml"]
