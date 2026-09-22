@@ -974,10 +974,12 @@ def _resolve_source_file(
     import errno
     import os
     import stat
+    no_follow_flag = getattr(os, "O_NOFOLLOW", 0)
+    no_block_flag = getattr(os, "O_NONBLOCK", 0)
     try:
-        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(str(path), os.O_RDONLY | no_follow_flag | no_block_flag)
     except OSError as exc:
-        if exc.errno == errno.ELOOP:
+        if exc.errno == getattr(errno, "ELOOP", None):
             raise ValueError(
                 "source_file must not be a symbolic link (security restriction)."
             ) from None

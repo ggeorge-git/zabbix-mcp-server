@@ -34,6 +34,9 @@ dependencies = [
 
 [project.optional-dependencies]
 reporting = ["weasyprint>=62.0"]
+dev = [
+    "pytest"
+]
 
 [project.scripts]
 zabbix-mcp-server = "zabbix_mcp.cli:main"

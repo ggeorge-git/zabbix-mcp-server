@@ -18,6 +18,7 @@
 """Smoke tests — no live Zabbix server required."""
 
 import asyncio
+import sys
 import os
 import tempfile
 import unittest
@@ -1959,6 +1960,8 @@ class TestSecurityPathTraversal(unittest.TestCase):
             _resolve_source_file(params, allowed_import_dirs=["/opt/zabbix-mcp/imports"])
         self.assertIn("allowed import directory", str(ctx.exception))
 
+
+    @unittest.skipIf(sys.platform == "win32", "os.symlink requires administrator privileges on Windows")
     def test_symlink_inside_allowed_dir_is_accepted(self):
         """Symlink is judged by its resolved target: inside the allowed dir, it is read."""
         import tempfile
@@ -1978,6 +1981,7 @@ class TestSecurityPathTraversal(unittest.TestCase):
             os.unlink(target)
             os.rmdir(tmpdir)
 
+    @unittest.skipIf(sys.platform == "win32", "os.symlink requires administrator privileges on Windows")
     def test_symlink_escaping_allowed_dir(self):
         """Symlink pointing outside allowed dir is rejected by the containment check."""
         import tempfile
