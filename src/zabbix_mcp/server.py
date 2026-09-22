@@ -170,7 +170,7 @@ _VALUE_TYPES: dict[str, int] = {
     "UNSIGNED": 3,
     "TEXT": 4,
     "BINARY": 5,
-    "JSON": 6,       # Zabbix 8.0+
+    "JSON": 6,  # Zabbix 8.0+
 }
 
 # Trigger severity / priority (priority)
@@ -303,15 +303,29 @@ _MAINTENANCE_TYPES: dict[str, int] = {
 # Registry: API method prefix → {field_name: mapping}
 # Used by _normalize_enum_fields to resolve symbolic names in top-level params.
 _ENUM_FIELDS: dict[str, dict[str, dict[str, int]]] = {
-    "item.": {"type": _ITEM_TYPES, "value_type": _VALUE_TYPES, "authtype": _AUTHTYPES, "post_type": _POST_TYPES},
-    "itemprototype.": {"type": _ITEM_TYPES, "value_type": _VALUE_TYPES, "authtype": _AUTHTYPES, "post_type": _POST_TYPES},
+    "item.": {
+        "type": _ITEM_TYPES,
+        "value_type": _VALUE_TYPES,
+        "authtype": _AUTHTYPES,
+        "post_type": _POST_TYPES,
+    },
+    "itemprototype.": {
+        "type": _ITEM_TYPES,
+        "value_type": _VALUE_TYPES,
+        "authtype": _AUTHTYPES,
+        "post_type": _POST_TYPES,
+    },
     "discoveryrule.": {"type": _ITEM_TYPES},
     "discoveryruleprototype.": {"type": _ITEM_TYPES},
     "trigger.": {"priority": _SEVERITY_LEVELS},
     "triggerprototype.": {"priority": _SEVERITY_LEVELS},
     "hostinterface.": {"type": _INTERFACE_TYPES},
     "mediatype.": {"type": _MEDIATYPE_TYPES},
-    "script.": {"type": _SCRIPT_TYPES, "scope": _SCRIPT_SCOPES, "execute_on": _SCRIPT_EXECUTE_ON},
+    "script.": {
+        "type": _SCRIPT_TYPES,
+        "scope": _SCRIPT_SCOPES,
+        "execute_on": _SCRIPT_EXECUTE_ON,
+    },
     "action.": {"eventsource": _EVENT_SOURCES},
     "proxy.": {"operating_mode": _PROXY_OPERATING_MODES},
     "usermacro.": {"type": _USERMACRO_TYPES},
@@ -324,11 +338,20 @@ _ENUM_FIELDS: dict[str, dict[str, dict[str, int]]] = {
 # Fields that Zabbix API expects as arrays of objects.
 # LLMs often send a single dict instead of a list — we auto-wrap it.
 _ARRAY_FIELDS: set[str] = {
-    "groups", "host_groups", "template_groups",
-    "templates", "tags", "interfaces", "macros",
-    "timeperiods", "steps", "operations",
-    "recovery_operations", "update_operations",
-    "preprocessing", "dchecks",
+    "groups",
+    "host_groups",
+    "template_groups",
+    "templates",
+    "tags",
+    "interfaces",
+    "macros",
+    "timeperiods",
+    "steps",
+    "operations",
+    "recovery_operations",
+    "update_operations",
+    "preprocessing",
+    "dchecks",
 }
 
 
@@ -436,7 +459,7 @@ def _try_parse_relative_time(value: str, tz: tzinfo | None = None, *, range_end:
 
 
 def _try_parse_timestamp(value: str, tz: tzinfo | None = None) -> int | None:
-    """Parse an ISO 8601 date-time string into a Unix timestamp.
+    """Parse an ISO 8601 date-time string or natural language relative/calendar strings into a Unix timestamp.
 
     ``datetime.fromisoformat`` goes first, after a trailing ``Z`` is
     rewritten to ``+00:00`` (Python 3.10 does not accept the suffix,
@@ -448,6 +471,42 @@ def _try_parse_timestamp(value: str, tz: tzinfo | None = None) -> int | None:
     UTC when none is given.  Returns ``None`` for anything that is not
     a date-time, so the caller can leave the value for Zabbix to judge.
     """
+    if not isinstance(value, str):
+        return None
+
+    value_clean = value.strip().lower()
+    now_dt = datetime.now(tz or timezone.utc)
+    now = int(now_dt.timestamp())
+
+    # --- 1. Handle Calendar Windows (e.g., "over the weekend") ---
+    if "weekend" in value_clean:
+        current_day = now_dt.weekday()  # Monday is 0, Sunday is 6
+        days_to_friday = (current_day - 4) % 7
+        if days_to_friday == 0 and now_dt.hour < 17:
+            days_to_friday = 7
+
+        friday_start = now_dt.replace(
+            hour=17, minute=0, second=0, microsecond=0
+        )
+        friday_ts = int((friday_start - timedelta(days=days_to_friday)).timestamp())
+        return friday_ts
+
+    if value_clean in ("yesterday", "since yesterday"):
+        return now - 86400
+
+    if value_clean in ("today", "since today"):
+        midnight = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        return int(midnight.timestamp())
+
+    # --- 2. Handle Relative Offsets (e.g., "12h", "2d", "30m", "1w") ---
+    match = re.match(r"^(\d+)\s*(m|h|d|w|mon)$", value_clean)
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+        multipliers = {"m": 60, "h": 3600, "d": 86400, "w": 604800, "mon": 2592000}
+        return now - (amount * multipliers[unit])
+
+    # --- 3. Standard ISO 8601 parsing ---
     raw = value.strip()
     if not raw or not raw[0].isdigit():
         return None
@@ -574,7 +633,10 @@ def _normalize_preprocessing(params: dict[str, Any]) -> dict[str, Any]:
     if "preprocessing" not in params or not isinstance(params["preprocessing"], list):
         return params
 
-    steps = [step.copy() if isinstance(step, dict) else step for step in params["preprocessing"]]
+    steps = [
+        step.copy() if isinstance(step, dict) else step
+        for step in params["preprocessing"]
+    ]
     changed = False
 
     for step in steps:
@@ -601,7 +663,9 @@ def _normalize_preprocessing(params: dict[str, Any]) -> dict[str, Any]:
 
         # Resolve symbolic error_handler name
         if "error_handler" in step:
-            new_val = _resolve_enum_value(step["error_handler"], _PREPROCESSING_ERROR_HANDLERS)
+            new_val = _resolve_enum_value(
+                step["error_handler"], _PREPROCESSING_ERROR_HANDLERS
+            )
             if new_val is not step["error_handler"]:
                 step["error_handler"] = new_val
                 changed = True
@@ -759,8 +823,12 @@ def _sanitize_create_params(params: dict[str, Any], api_method: str) -> None:
     to know which fields are read-only in each context.
     """
     # trigger/triggerprototype: dependencies[].description is read-only
-    if api_method in ("trigger.create", "trigger.update",
-                      "triggerprototype.create", "triggerprototype.update"):
+    if api_method in (
+        "trigger.create",
+        "trigger.update",
+        "triggerprototype.create",
+        "triggerprototype.update",
+    ):
         deps = params.get("dependencies")
         if isinstance(deps, list):
             for dep in deps:
@@ -953,7 +1021,8 @@ def _resolve_source_file(
         # list is in the operator's config + server logs already.
         logger.warning(
             "source_file rejected (outside allowed_import_dirs): %s; allowed=%s",
-            path, [str(d) for d in allowed],
+            path,
+            [str(d) for d in allowed],
         )
         raise ValueError(
             "source_file is not under any allowed import directory "
@@ -1045,7 +1114,7 @@ def _validate_import_uuids(params: dict[str, Any]) -> None:
         raise ValueError(
             f"Invalid UUID(s) in import source: {examples}. "
             f"UUIDs must be valid v4 format (e.g. '550e8400-e29b-41d4-a716-446655440000'). "
-            f"Generate with: python -c \"import uuid; print(uuid.uuid4())\""
+            f'Generate with: python -c "import uuid; print(uuid.uuid4())"'
         )
 
 
@@ -1055,7 +1124,9 @@ def _snake_to_camel(name: str) -> str:
     return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
 
-def _normalize_import_rules(params: dict[str, Any], zabbix_version: str | None = None) -> dict[str, Any]:
+def _normalize_import_rules(
+    params: dict[str, Any], zabbix_version: str | None = None
+) -> dict[str, Any]:
     """Normalize configuration.import rules for the target Zabbix version.
 
     Handles two common issues:
@@ -1100,9 +1171,8 @@ def _normalize_import_rules(params: dict[str, Any], zabbix_version: str | None =
 
         if major_minor < (6, 2):
             # Zabbix <6.2: only "groups" exists
-            groups_val = (
-                normalized.pop("host_groups", None)
-                or normalized.pop("template_groups", None)
+            groups_val = normalized.pop("host_groups", None) or normalized.pop(
+                "template_groups", None
             )
             if groups_val and "groups" not in normalized:
                 normalized["groups"] = groups_val
@@ -1316,8 +1386,13 @@ def _build_zabbix_params(
     # create/update/mass/special methods: the 'params' dict IS the API payload
     if "params" in args:
         params = args["params"]
-        if method_def.api_method in ("configuration.import", "configuration.importcompare"):
-            params = _resolve_source_file(params, allowed_import_dirs=allowed_import_dirs)
+        if method_def.api_method in (
+            "configuration.import",
+            "configuration.importcompare",
+        ):
+            params = _resolve_source_file(
+                params, allowed_import_dirs=allowed_import_dirs
+            )
             _validate_import_uuids(params)
             params = _normalize_import_rules(params, zabbix_version)
         if isinstance(params, dict):
@@ -1345,7 +1420,11 @@ def _build_zabbix_params(
                     item_type = int(params.get("type", -1))
                 except (ValueError, TypeError):
                     item_type = -1
-                if "delay" not in params and item_type not in _NO_DELAY_TYPES and item_type >= 0:
+                if (
+                    "delay" not in params
+                    and item_type not in _NO_DELAY_TYPES
+                    and item_type >= 0
+                ):
                     params["delay"] = "1m"
 
             # Strip read-only/unsupported fields that LLMs copy from YAML templates.
@@ -1371,13 +1450,21 @@ def _build_zabbix_params(
             # - any other single field name -> single-item array (Zabbix
             #   7.4 rejects bare-string output on hostgroup/user/role/...
             #   with ``Invalid parameter "/output": value must be "extend"``)
-            if param_def.name == "output" and isinstance(value, str) and value not in ("extend", "count"):
+            if (
+                param_def.name == "output"
+                and isinstance(value, str)
+                and value not in ("extend", "count")
+            ):
                 if "," in value:
                     value = [f.strip() for f in value.split(",")]
                 else:
                     value = [value.strip()]
             # Split comma-separated sort fields
-            if param_def.name == "sortfield" and isinstance(value, str) and "," in value:
+            if (
+                param_def.name == "sortfield"
+                and isinstance(value, str)
+                and "," in value
+            ):
                 value = [f.strip() for f in value.split(",")]
             params[param_def.name] = value
 
@@ -1436,8 +1523,10 @@ _DEFAULT_GET_PARAMS: dict[str, dict[str, Any]] = {
 
 # API methods that support valuemap assignment by name.
 _VALUEMAP_METHODS: set[str] = {
-    "item.create", "item.update",
-    "itemprototype.create", "itemprototype.update",
+    "item.create",
+    "item.update",
+    "itemprototype.create",
+    "itemprototype.update",
 }
 
 
@@ -1575,10 +1664,13 @@ _TASK_AUGMENTED_TOOLS = frozenset({"report_generate"})
 # Extension tools that perform write operations on Zabbix and must be hidden
 # from a read-only token's tools/list. The auto-generated tools are flagged
 # via MethodDef.read_only; this set covers the hand-rolled extension tools.
-_WRITE_EXTENSION_TOOLS: frozenset[str] = frozenset({
-    "action_prepare", "action_confirm",
-    "zabbix_raw_api_call",  # caller can invoke any Zabbix method, including writes
-})
+_WRITE_EXTENSION_TOOLS: frozenset[str] = frozenset(
+    {
+        "action_prepare",
+        "action_confirm",
+        "zabbix_raw_api_call",  # caller can invoke any Zabbix method, including writes
+    }
+)
 
 
 def _build_write_tools_set() -> frozenset[str]:
@@ -1589,6 +1681,7 @@ def _build_write_tools_set() -> frozenset[str]:
     to drop write tools from a read-only token's tools/list view.
     """
     from zabbix_mcp.api import ALL_METHODS
+
     auto = {m.tool_name for m in ALL_METHODS if not m.read_only}
     return frozenset(auto | _WRITE_EXTENSION_TOOLS)
 
@@ -1617,6 +1710,7 @@ def _filter_tools_by_token(tools: list) -> list:
     so existing single-token / no-auth setups behave as before.
     """
     from zabbix_mcp.token_store import current_token_info
+
     token = current_token_info.get()
     if token is None:
         return tools
@@ -1631,6 +1725,7 @@ def _filter_tools_by_token(tools: list) -> list:
         return tools
 
     from zabbix_mcp.config import _expand_tool_groups, TOOL_GROUPS
+
     allowed_prefixes = set(_expand_tool_groups(scopes))
     extension_names = set(TOOL_GROUPS.get("extensions", []))
     has_extensions_scope = "extensions" in scopes
@@ -1681,12 +1776,16 @@ def _forwarded_base_from_headers(headers: dict[bytes, bytes]) -> str | None:
     opposite of ``X-Forwarded-For``, where the first entry is the
     original client and is what an IP allowlist wants.)
     """
-    host = headers.get(b"x-forwarded-host", b"").decode("latin-1").split(",")[-1].strip()
+    host = (
+        headers.get(b"x-forwarded-host", b"").decode("latin-1").split(",")[-1].strip()
+    )
     if not host or not _HOST_RE.match(host):
         # Not a bare authority - a header could otherwise smuggle a path,
         # a query or a second origin into the link handed to the user.
         return None
-    proto = headers.get(b"x-forwarded-proto", b"").decode("latin-1").split(",")[-1].strip()
+    proto = (
+        headers.get(b"x-forwarded-proto", b"").decode("latin-1").split(",")[-1].strip()
+    )
     if proto not in ("http", "https"):
         return None
     return f"{proto}://{host}"
@@ -1722,7 +1821,9 @@ def _make_request_context_middleware(inner_app, trusted_proxies: list[str]):
             literals.add(entry)
             logger.warning(
                 "trusted_proxies entry %r is not an IP address or network; it will "
-                "only match an exact string.", entry)
+                "only match an exact string.",
+                entry,
+            )
 
     def _is_trusted(addr: str | None) -> bool:
         if not addr:
@@ -1795,6 +1896,7 @@ def _report_download_base(config, transport: str) -> tuple[str | None, str | Non
     if public:
         return public, None
     from zabbix_mcp.token_store import current_request_base
+
     base = current_request_base.get()
     if base:
         return base.rstrip("/"), None
@@ -1843,6 +1945,7 @@ def _load_server_icons() -> list[Icon] | None:
     endpoint - the few KB cost is paid once per ``initialize``.
     """
     import importlib.resources
+
     try:
         # Package-install layout: zabbix_mcp/admin/static/logo-symbol-color.svg
         svg_bytes = (
@@ -1853,10 +1956,18 @@ def _load_server_icons() -> list[Icon] | None:
     except (FileNotFoundError, ModuleNotFoundError, OSError):
         return None
     encoded = base64.b64encode(svg_bytes).decode("ascii")
-    return [Icon(src=f"data:image/svg+xml;base64,{encoded}", mimeType="image/svg+xml", sizes=["any"])]
+    return [
+        Icon(
+            src=f"data:image/svg+xml;base64,{encoded}",
+            mimeType="image/svg+xml",
+            sizes=["any"],
+        )
+    ]
 
 
-def _build_transport_security(config: AppConfig, host: str, port: int) -> TransportSecuritySettings | None:
+def _build_transport_security(
+    config: AppConfig, host: str, port: int
+) -> TransportSecuritySettings | None:
     """Compose ``TransportSecuritySettings`` for MCPServer from project config.
 
     The MCP 2025-11-25 spec asks servers to validate the Origin header
@@ -1887,9 +1998,14 @@ def _build_transport_security(config: AppConfig, host: str, port: int) -> Transp
     derived_origin = ""
     if public_url:
         from urllib.parse import urlparse
+
         parsed = urlparse(public_url)
         if parsed.hostname:
-            derived_host = parsed.hostname if not parsed.port else f"{parsed.hostname}:{parsed.port}"
+            derived_host = (
+                parsed.hostname
+                if not parsed.port
+                else f"{parsed.hostname}:{parsed.port}"
+            )
             derived_origin = f"{parsed.scheme}://{derived_host}"
 
     allowed_hosts = explicit_hosts.copy()
@@ -1930,6 +2046,7 @@ def _check_raw_json_allowed(raw_json: bool) -> str | None:
     if not raw_json:
         return None
     from zabbix_mcp.token_store import current_token_info
+
     tok = current_token_info.get()
     if tok is None:
         # Pre-auth / stdio mode. Allow only when the operator has
@@ -1938,6 +2055,7 @@ def _check_raw_json_allowed(raw_json: bool) -> str | None:
         # prompt-injection mitigation.
         try:
             from zabbix_mcp.config import get_config
+
             cfg = get_config()
             if getattr(cfg.server, "stdio_allow_raw_json", False):
                 return None
@@ -2049,7 +2167,9 @@ def _truncate_result(result: Any, *, max_chars: int = _RESPONSE_MAX_CHARS) -> st
 
         # Reserve space for the truncation metadata appended at the end
         meta_template = {"_truncated": True, "_total_count": total, "_returned": 0}
-        meta_overhead = len(_dumps(meta_template, indent=None)) + 10  # comma + whitespace
+        meta_overhead = (
+            len(_dumps(meta_template, indent=None)) + 10
+        )  # comma + whitespace
         budget = max_chars - meta_overhead
 
         # Binary search for the maximum number of items that fit
@@ -2063,13 +2183,15 @@ def _truncate_result(result: Any, *, max_chars: int = _RESPONSE_MAX_CHARS) -> st
 
         if lo == 0:
             # Even a single item exceeds budget — return summary only
-            return _dumps({
-                "_truncated": True,
-                "_total_count": total,
-                "_returned": 0,
-                "_error": "Single result item exceeds maximum response size",
-                "_max_size": max_chars,
-            })
+            return _dumps(
+                {
+                    "_truncated": True,
+                    "_total_count": total,
+                    "_returned": 0,
+                    "_error": "Single result item exceeds maximum response size",
+                    "_max_size": max_chars,
+                }
+            )
         truncated_list = result[:lo]
         meta = {"_truncated": True, "_total_count": total, "_returned": lo}
         truncated_list.append(meta)
@@ -2103,6 +2225,59 @@ def _truncate_result(result: Any, *, max_chars: int = _RESPONSE_MAX_CHARS) -> st
         "_max_size": max_chars,
     }
     return _dumps(summary)
+
+
+def _resolve_names_to_ids(
+    params: dict[str, Any], client_manager: ClientManager, server_name: str
+) -> dict[str, Any]:
+    """Resolves human-readable host names, group names, or trigger names to Zabbix IDs
+    if the AI provides string representations in standard params fields.
+    """
+    # 1. Resolve host names to hostids
+    if "hosts" in params and isinstance(params["hosts"], list):
+        resolved_ids = []
+        unresolved_names = []
+        for item in params["hosts"]:
+            if str(item).isdigit():
+                resolved_ids.append(item)
+            else:
+                unresolved_names.append(item)
+
+        if unresolved_names:
+            matches = client_manager.call(
+                server_name,
+                "host.get",
+                {"output": ["hostid"], "filter": {"name": unresolved_names}},
+            )
+            resolved_ids.extend([m["hostid"] for m in matches])
+
+        if resolved_ids:
+            params["hostids"] = resolved_ids
+            del params["hosts"]
+
+    # 2. Resolve host group names to groupids
+    if "groups" in params and isinstance(params["groups"], list):
+        resolved_ids = []
+        unresolved_names = []
+        for item in params["groups"]:
+            if str(item).isdigit():
+                resolved_ids.append(item)
+            else:
+                unresolved_names.append(item)
+
+        if unresolved_names:
+            matches = client_manager.call(
+                server_name,
+                "hostgroup.get",
+                {"output": ["groupid"], "filter": {"name": unresolved_names}},
+            )
+            resolved_ids.extend([m["groupid"] for m in matches])
+
+        if resolved_ids:
+            params["groupids"] = resolved_ids
+            del params["groups"]
+
+    return params
 
 
 def _make_tool_handler(
@@ -2147,7 +2322,9 @@ def _make_tool_handler(
         # ``host_get`` through the session-cookie path that bypasses
         # the rate limiter / cached client.
         _SESSION_AUTH_METHODS = {
-            "user.logout", "user.checkAuthentication", "userdirectory.test",
+            "user.logout",
+            "user.checkAuthentication",
+            "userdirectory.test",
         }
         if method_def.api_method in _SESSION_AUTH_METHODS:
             auth_sessionid = kwargs.pop("auth_sessionid", None)
@@ -2164,8 +2341,15 @@ def _make_tool_handler(
 
             # Check token authorization (servers, scopes, read_only)
             from zabbix_mcp.token_store import check_token_authorization
-            _tool_prefix = method_def.tool_name.rsplit("_", 1)[0] if "_" in method_def.tool_name else method_def.tool_name
-            _auth_err = check_token_authorization(server_name, tool_prefix=_tool_prefix, is_write=not method_def.read_only)
+
+            _tool_prefix = (
+                method_def.tool_name.rsplit("_", 1)[0]
+                if "_" in method_def.tool_name
+                else method_def.tool_name
+            )
+            _auth_err = check_token_authorization(
+                server_name, tool_prefix=_tool_prefix, is_write=not method_def.read_only
+            )
             if _auth_err:
                 raise ToolError(_auth_err)
 
@@ -2173,18 +2357,20 @@ def _make_tool_handler(
                 client_manager.check_write(server_name)
 
             zabbix_version = await asyncio.to_thread(
-                client_manager.get_version, server_name,
+                client_manager.get_version,
+                server_name,
             )
             _refuse_if_unavailable(method_def.api_method, zabbix_version)
             tz = await asyncio.to_thread(resolve_zone, client_manager, server_name)
             # Capture client-side post-filter flags before _build_zabbix_params
             # strips them from the API payload.
-            _problem_monitored = (
-                method_def.api_method == "problem.get"
-                and bool(kwargs.get("monitored"))
+            _problem_monitored = method_def.api_method == "problem.get" and bool(
+                kwargs.get("monitored")
             )
             params = _build_zabbix_params(
-                method_def, kwargs, zabbix_version,
+                method_def,
+                kwargs,
+                zabbix_version,
                 allowed_import_dirs=allowed_import_dirs,
                 compact_output=compact_output,
                 tz=tz,
@@ -2198,8 +2384,17 @@ def _make_tool_handler(
                     typed=[p.name for p in schema_params],
                 )
             params = await asyncio.to_thread(
+                _resolve_names_to_ids,
+                params,
+                client_manager,
+                server_name,
+            )
+            params = await asyncio.to_thread(
                 _resolve_valuemap_by_name,
-                params, method_def.api_method, client_manager, server_name,
+                params,
+                method_def.api_method,
+                client_manager,
+                server_name,
             )
             if strip_write and not method_def.read_only:
                 # What X.get returns and X.update / X.create refuse, measured
@@ -2220,16 +2415,26 @@ def _make_tool_handler(
             elif auth_sessionid:
                 result = await asyncio.to_thread(
                     client_manager.call_with_session,
-                    server_name, method_def.api_method, params, auth_sessionid,
+                    server_name,
+                    method_def.api_method,
+                    params,
+                    auth_sessionid,
                 )
             else:
                 result = await asyncio.to_thread(
-                    client_manager.call, server_name, method_def.api_method, params,
+                    client_manager.call,
+                    server_name,
+                    method_def.api_method,
+                    params,
                 )
             if _problem_monitored and isinstance(result, list):
                 from zabbix_mcp.api.extensions import _filter_active_problems
+
                 kept, _ = await asyncio.to_thread(
-                    _filter_active_problems, result, client_manager, server_name,
+                    _filter_active_problems,
+                    result,
+                    client_manager,
+                    server_name,
                 )
                 result = kept
             result = add_local_times(result, tz)
@@ -2244,7 +2449,9 @@ def _make_tool_handler(
             logger.warning("Zabbix rejected %s on server '%s': %s", method_def.api_method, server_name, e)
             raise ToolError(_api_error_text(method_def.api_method, e))
         except Exception:
-            logger.exception("Error calling %s on server '%s'", method_def.api_method, server_name)
+            logger.exception(
+                "Error calling %s on server '%s'", method_def.api_method, server_name
+            )
             raise ToolError(
                 f"API call failed for {method_def.api_method}. Check server logs for details."
             )
@@ -2257,12 +2464,14 @@ def _make_tool_handler(
         f"Target Zabbix server. Available: {', '.join(server_names)}. "
         f"Defaults to '{server_names[0]}' if omitted."
     )
-    sig_params.append(inspect.Parameter(
-        "server",
-        inspect.Parameter.KEYWORD_ONLY,
-        default=None,
-        annotation=Annotated[Optional[str], Field(description=server_desc)],
-    ))
+    sig_params.append(
+        inspect.Parameter(
+            "server",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation=Annotated[Optional[str], Field(description=server_desc)],
+        )
+    )
 
     # Method-specific parameters (generic get parameters are rewritten for
     # the method's contract; see api/contracts.py)
@@ -2272,25 +2481,31 @@ def _make_tool_handler(
             annotation = Annotated[python_type, Field(description=p.description)]
             default = inspect.Parameter.empty
         else:
-            annotation = Annotated[Optional[python_type], Field(description=p.description)]
+            annotation = Annotated[
+                Optional[python_type], Field(description=p.description)
+            ]
             default = p.default
-        sig_params.append(inspect.Parameter(
-            p.name,
-            inspect.Parameter.KEYWORD_ONLY,
-            default=default,
-            annotation=annotation,
-        ))
+        sig_params.append(
+            inspect.Parameter(
+                p.name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=annotation,
+            )
+        )
 
     # raw_json: token-gated escape hatch for programmatic non-LLM callers
     # who need pure JSON. Injected on every tool's signature so the JSON
     # schema advertises it consistently (default false, server-side check
     # rejects unauthorized use).
-    sig_params.append(inspect.Parameter(
-        "raw_json",
-        inspect.Parameter.KEYWORD_ONLY,
-        default=False,
-        annotation=Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)],
-    ))
+    sig_params.append(
+        inspect.Parameter(
+            "raw_json",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=False,
+            annotation=Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)],
+        )
+    )
 
     handler.__signature__ = inspect.Signature(sig_params, return_annotation=str)
     handler.__name__ = method_def.tool_name
@@ -2345,7 +2560,9 @@ def _register_tools(
         if not method_def.read_only and not register_write_tools:
             continue
         handler = _make_tool_handler(
-            method_def, client_manager, server_names,
+            method_def,
+            client_manager,
+            server_names,
             allowed_import_dirs=allowed_import_dirs,
             compact_output=compact_output,
             response_max_chars=response_max_chars,
@@ -2358,9 +2575,14 @@ def _register_tools(
             tool_annotations["readOnlyHint"] = True
         else:
             tool_annotations["readOnlyHint"] = False
-            if method_def.tool_name.endswith("_delete") or method_def.tool_name == "script_execute":
+            if (
+                method_def.tool_name.endswith("_delete")
+                or method_def.tool_name == "script_execute"
+            ):
                 tool_annotations["destructiveHint"] = True
-            if method_def.tool_name.endswith("_get") or method_def.tool_name.endswith("_export"):
+            if method_def.tool_name.endswith("_get") or method_def.tool_name.endswith(
+                "_export"
+            ):
                 tool_annotations["idempotentHint"] = True
         tool_annotations["openWorldHint"] = True
 
@@ -2381,9 +2603,15 @@ def _register_tools(
 
     # Helper: check if an extension tool should be registered (respects tools/disabled_tools)
     def _ext_allowed(tool_name: str) -> bool:
-        if tools_filter is not None and tool_name not in tools_filter and "extensions" not in (tools_filter or []):
+        if (
+            tools_filter is not None
+            and tool_name not in tools_filter
+            and "extensions" not in (tools_filter or [])
+        ):
             return False
-        if disabled_tools is not None and (tool_name in disabled_tools or "extensions" in disabled_tools):
+        if disabled_tools is not None and (
+            tool_name in disabled_tools or "extensions" in disabled_tools
+        ):
             return False
         if not register_write_tools and tool_name in _WRITE_EXTENSION_TOOLS:
             return False
@@ -2403,15 +2631,24 @@ def _register_tools(
     # type. userdirectory.test stays read-only through its MethodDef.
     _READ_ONLY_SUFFIXES = (
         ".get",
-        ".getscriptsbyevents", ".getscriptsbyhosts",
-        ".export", ".importcompare",
+        ".getscriptsbyevents",
+        ".getscriptsbyhosts",
+        ".export",
+        ".importcompare",
         ".checkauthentication",
     )
 
     async def zabbix_raw_api_call(
         *,
-        method: Annotated[str, Field(description="Full Zabbix API method name, e.g. 'host.get', 'trigger.create'")],
-        params: Annotated[Optional[dict], Field(description="API method parameters as a JSON object")] = None,
+        method: Annotated[
+            str,
+            Field(
+                description="Full Zabbix API method name, e.g. 'host.get', 'trigger.create'"
+            ),
+        ],
+        params: Annotated[
+            Optional[dict], Field(description="API method parameters as a JSON object")
+        ] = None,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
@@ -2430,14 +2667,15 @@ def _register_tools(
             # Enforce read_only: check known definitions first, then fall back
             # to suffix whitelist for unknown methods.
             method_lower = method.lower()
-            is_read_only = (
-                method_lower in _KNOWN_READ_ONLY
-                or any(method_lower.endswith(s) for s in _READ_ONLY_SUFFIXES)
+            is_read_only = method_lower in _KNOWN_READ_ONLY or any(
+                method_lower.endswith(s) for s in _READ_ONLY_SUFFIXES
             )
 
             # Token authorization: server + scope + read_only
             _prefix = method.split(".")[0].lower() if "." in method else ""
-            _auth_err = check_token_authorization(server_name, tool_prefix=_prefix, is_write=not is_read_only)
+            _auth_err = check_token_authorization(
+                server_name, tool_prefix=_prefix, is_write=not is_read_only
+            )
             if _auth_err:
                 raise ToolError(_auth_err)
 
@@ -2461,7 +2699,9 @@ def _register_tools(
             logger.warning("Zabbix rejected raw %s on server '%s': %s", method, server_name, e)
             raise ToolError(_api_error_text(method, e))
         except Exception:
-            logger.exception("Error in raw API call '%s' on server '%s'", method, server_name)
+            logger.exception(
+                "Error in raw API call '%s' on server '%s'", method, server_name
+            )
             raise ToolError(
                 f"API call failed for {method}. Check server logs for details."
             )
@@ -2514,17 +2754,34 @@ def _register_tools(
     # Extension tools (server-side analytics, graph export, reporting)
     # ------------------------------------------------------------------
     from zabbix_mcp.api.extensions import (
-        graph_render, anomaly_detect, capacity_forecast, item_threshold_search,
-        problem_active_get, host_status_get, hostgroup_overview_get,
-        infrastructure_summary_get, item_history_summary_get,
+        graph_render,
+        anomaly_detect,
+        capacity_forecast,
+        item_threshold_search,
+        problem_active_get,
+        host_status_get,
+        hostgroup_overview_get,
+        infrastructure_summary_get,
+        item_history_summary_get,
     )
 
     async def _graph_render(
         *,
         graphid: Annotated[str, Field(description="Zabbix graph ID (numeric)")],
-        period: Annotated[Optional[str], Field(description="Time period: '1h', '6h', '1d', '7d', '30d' (default: '1h')")] = "1h",
-        width: Annotated[Optional[int], Field(description="Image width in pixels, 100-4096 (default: 800)")] = 800,
-        height: Annotated[Optional[int], Field(description="Image height in pixels, 50-2048 (default: 200)")] = 200,
+        period: Annotated[
+            Optional[str],
+            Field(
+                description="Time period: '1h', '6h', '1d', '7d', '30d' (default: '1h')"
+            ),
+        ] = "1h",
+        width: Annotated[
+            Optional[int],
+            Field(description="Image width in pixels, 100-4096 (default: 800)"),
+        ] = 800,
+        height: Annotated[
+            Optional[int],
+            Field(description="Image height in pixels, 50-2048 (default: 200)"),
+        ] = 200,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
@@ -2545,18 +2802,38 @@ def _register_tools(
 
     if _ext_allowed("graph_render"):
         mcp.add_tool(
-            _graph_render, name="graph_render",
+            _graph_render,
+            name="graph_render",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
         )
         count += 1
 
     async def _anomaly_detect(
         *,
-        item_key: Annotated[str, Field(description="Item key pattern to analyze (e.g. 'system.cpu.util', 'vm.memory.utilization')")],
-        hostgroupid: Annotated[Optional[str], Field(description="Host group ID — analyze all hosts in this group")] = None,
-        hostid: Annotated[Optional[str], Field(description="Single host ID — compare against group baseline")] = None,
-        period: Annotated[Optional[str], Field(description="Analysis period: '1d', '7d', '30d' (default: '7d')")] = "7d",
-        threshold: Annotated[Optional[float], Field(description="Z-score threshold for anomaly (default: 2.0 = 2 standard deviations)")] = 2.0,
+        item_key: Annotated[
+            str,
+            Field(
+                description="Item key pattern to analyze (e.g. 'system.cpu.util', 'vm.memory.utilization')"
+            ),
+        ],
+        hostgroupid: Annotated[
+            Optional[str],
+            Field(description="Host group ID — analyze all hosts in this group"),
+        ] = None,
+        hostid: Annotated[
+            Optional[str],
+            Field(description="Single host ID — compare against group baseline"),
+        ] = None,
+        period: Annotated[
+            Optional[str],
+            Field(description="Analysis period: '1d', '7d', '30d' (default: '7d')"),
+        ] = "7d",
+        threshold: Annotated[
+            Optional[float],
+            Field(
+                description="Z-score threshold for anomaly (default: 2.0 = 2 standard deviations)"
+            ),
+        ] = 2.0,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
@@ -2578,7 +2855,8 @@ def _register_tools(
 
     if _ext_allowed("anomaly_detect"):
         mcp.add_tool(
-            _anomaly_detect, name="anomaly_detect",
+            _anomaly_detect,
+            name="anomaly_detect",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
         )
         count += 1
@@ -2586,9 +2864,24 @@ def _register_tools(
     async def _capacity_forecast(
         *,
         hostid: Annotated[str, Field(description="Host ID to analyze")],
-        item_key: Annotated[str, Field(description="Item key to forecast (e.g. 'vfs.fs.size[/,pused]', 'system.cpu.util')")],
-        threshold: Annotated[Optional[float], Field(description="Value threshold to predict when reached (default: 90.0)")] = 90.0,
-        period: Annotated[Optional[str], Field(description="Historical period for regression: '7d', '30d', '90d' (default: '30d')")] = "30d",
+        item_key: Annotated[
+            str,
+            Field(
+                description="Item key to forecast (e.g. 'vfs.fs.size[/,pused]', 'system.cpu.util')"
+            ),
+        ],
+        threshold: Annotated[
+            Optional[float],
+            Field(
+                description="Value threshold to predict when reached (default: 90.0)"
+            ),
+        ] = 90.0,
+        period: Annotated[
+            Optional[str],
+            Field(
+                description="Historical period for regression: '7d', '30d', '90d' (default: '30d')"
+            ),
+        ] = "30d",
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
@@ -2609,7 +2902,8 @@ def _register_tools(
 
     if _ext_allowed("capacity_forecast"):
         mcp.add_tool(
-            _capacity_forecast, name="capacity_forecast",
+            _capacity_forecast,
+            name="capacity_forecast",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
         )
         count += 1
@@ -2666,7 +2960,8 @@ def _register_tools(
         - Disk usage near capacity: search={"key_": "pused"}, lastvalue_ge=80
 
         Returns {"scanned": N, "matched": M, "returned": R, "items": [...]} sorted by lastvalue.
-        matched = total passing threshold; returned = items included (may be less if result_limit set)."""
+        matched = total passing threshold; returned = items included (may be less if result_limit set).
+        """
         _raw_err = _check_raw_json_allowed(bool(raw_json))
         if _raw_err:
             raise ToolError(_raw_err)
@@ -2702,16 +2997,39 @@ def _register_tools(
 
     if _ext_allowed("item_threshold_search"):
         mcp.add_tool(
-            _item_threshold_search, name="item_threshold_search",
+            _item_threshold_search,
+            name="item_threshold_search",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
         )
         count += 1
 
     async def _problem_active_get(
         *,
+        hosts: Annotated[
+            Optional[list[str]],
+            Field(
+                description="List of hosts to filter by. Supports friendly host names (e.g. ['web-server-01']) or numeric host IDs. Names are resolved to IDs automatically."
+            ),
+        ] = None,
+        groups: Annotated[
+            Optional[list[str]],
+            Field(
+                description="List of host groups to filter by. Supports friendly group names (e.g. ['Linux servers']) or numeric group IDs. Names are resolved to IDs automatically."
+            ),
+        ] = None,
+        search: Annotated[
+            Optional[str],
+            Field(
+                description="Substring match or keyword filter on the problem name/alert name (e.g. 'CPU', 'disk', 'down')."
+            ),
+        ] = None,
+        time_from: Annotated[
+            Optional[str],
+            Field(
+                description="Look back window using relative offsets or natural language (e.g. '12h', '2d', 'over the weekend', 'since yesterday', 'today')."
+            ),
+        ] = None,
         severities: Annotated[Optional[list[int]], Field(description="Severity floor as a list of numeric codes. Default [2,3,4,5] (Warning and above). Pass [0,1,2,3,4,5] to include Information / Not classified.")] = None,
-        hostids: Annotated[Optional[list[str]], Field(description="Restrict to problems on these hosts.")] = None,
-        groupids: Annotated[Optional[list[str]], Field(description="Restrict to problems on hosts in these host groups.")] = None,
         limit: Annotated[Optional[int], Field(description="Max problems to return after filtering disabled triggers/hosts (default 50).")] = 50,
         sortfield: Annotated[Optional[str], Field(description="Problem sort key; problem.get can only sort by 'eventid' (default).")] = "eventid",
         sortorder: Annotated[Optional[str], Field(description="'ASC' or 'DESC' (default 'DESC').")] = "DESC",
@@ -2733,6 +3051,9 @@ def _register_tools(
         "active problems", "current issues", "what is firing", "real
         problems", or "skip disabled".
 
+        Supports friendly host/group name resolutions, search filters, and relative
+        natural language time windows (e.g. 'over the weekend').
+
         For an unfiltered raw view (e.g. to also see stale problems), use
         problem_get instead.
 
@@ -2748,13 +3069,15 @@ def _register_tools(
             raise ToolError(_auth_err)
         return _raise_if_extension_error(await asyncio.to_thread(
             problem_active_get, client_manager, srv,
-            severities=severities, hostids=hostids, groupids=groupids,
+            hosts=hosts, groups=groups, search=search, time_from=time_from,
+            severities=severities,
             limit=limit, sortfield=sortfield, sortorder=sortorder,
         ), raw_json=bool(raw_json), tz=await asyncio.to_thread(resolve_zone, client_manager, srv))
 
     if _ext_allowed("problem_active_get"):
         mcp.add_tool(
-            _problem_active_get, name="problem_active_get",
+            _problem_active_get,
+            name="problem_active_get",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
         )
         count += 1
@@ -2764,14 +3087,25 @@ def _register_tools(
     # struggle with, esp. local LLMs).
     async def _host_status_get(
         *,
-        host_id: Annotated[Optional[str], Field(description="Zabbix host ID. Either host_id or host (the name) must be provided.")] = None,
-        host: Annotated[Optional[str], Field(description="Zabbix host name. Tried as exact match first, falls back to substring search.")] = None,
+        host_id: Annotated[
+            Optional[str],
+            Field(
+                description="Zabbix host ID. Either host_id or host (the name) must be provided."
+            ),
+        ] = None,
+        host: Annotated[
+            Optional[str],
+            Field(
+                description="Zabbix host name. Tried as exact match first, falls back to substring search."
+            ),
+        ] = None,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
         """Single-call host status: identity + interfaces + monitored-state + active problems (severity Warning+, with disabled-trigger/host filtered out) + last 8 item values, in one self-contained JSON payload.
 
-        Use this whenever an operator asks 'what is the status of <hostname>?' or 'what is wrong on <hostname>?'. Replaces the typical 3-4 tool chain (host_get + hostinterface_get + problem_get + item_get) so a one-shot LLM prompt can answer without follow-up tool calls."""
+        Use this whenever an operator asks 'what is the status of <hostname>?' or 'what is wrong on <hostname>?'. Replaces the typical 3-4 tool chain (host_get + hostinterface_get + problem_get + item_get) so a one-shot LLM prompt can answer without follow-up tool calls.
+        """
         _raw_err = _check_raw_json_allowed(bool(raw_json))
         if _raw_err:
             raise ToolError(_raw_err)
@@ -2779,9 +3113,16 @@ def _register_tools(
         # Composite read - require scope for every Zabbix endpoint we
         # internally call so a narrow-scoped token can't read problems
         # / items here that it could not pull via problem_get / item_get.
-        _auth_err = check_token_authorization(srv, tool_prefixes=[
-            "host", "hostinterface", "problem", "trigger", "item",
-        ])
+        _auth_err = check_token_authorization(
+            srv,
+            tool_prefixes=[
+                "host",
+                "hostinterface",
+                "problem",
+                "trigger",
+                "item",
+            ],
+        )
         if _auth_err:
             raise ToolError(_auth_err)
         return _raise_if_extension_error(await asyncio.to_thread(
@@ -2790,29 +3131,51 @@ def _register_tools(
         ), raw_json=bool(raw_json), tz=await asyncio.to_thread(resolve_zone, client_manager, srv))
 
     if _ext_allowed("host_status_get"):
-        mcp.add_tool(_host_status_get, name="host_status_get",
-                     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
+        mcp.add_tool(
+            _host_status_get,
+            name="host_status_get",
+            annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+        )
         count += 1
 
     async def _hostgroup_overview_get(
         *,
-        groupid: Annotated[Optional[str], Field(description="Host group ID. Either groupid or group (the name) must be supplied.")] = None,
-        group: Annotated[Optional[str], Field(description="Host group name (exact match).")] = None,
-        top_n: Annotated[Optional[int], Field(description="Number of most-problematic hosts to return (default 5).")] = 5,
+        groupid: Annotated[
+            Optional[str],
+            Field(
+                description="Host group ID. Either groupid or group (the name) must be supplied."
+            ),
+        ] = None,
+        group: Annotated[
+            Optional[str], Field(description="Host group name (exact match).")
+        ] = None,
+        top_n: Annotated[
+            Optional[int],
+            Field(
+                description="Number of most-problematic hosts to return (default 5)."
+            ),
+        ] = 5,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
         """Host group health roll-up: member-host counts (total / enabled / with-problems) + active-problem severity breakdown + top-N most-problematic hosts inside the group, in one call.
 
-        Use this for 'how is the <hostgroup> doing?' / 'give me a daily health report for <group>' style prompts. Replaces hostgroup_get + host_get(groupids=) + problem_get(hostids=) chain."""
+        Use this for 'how is the <hostgroup> doing?' / 'give me a daily health report for <group>' style prompts. Replaces hostgroup_get + host_get(groupids=) + problem_get(hostids=) chain.
+        """
         _raw_err = _check_raw_json_allowed(bool(raw_json))
         if _raw_err:
             raise ToolError(_raw_err)
         srv = _resolve_server_for_caller(client_manager, server or _default_server_for_caller(client_manager))
         # Composite read - covers hostgroup + member host + active problems.
-        _auth_err = check_token_authorization(srv, tool_prefixes=[
-            "hostgroup", "host", "problem", "trigger",
-        ])
+        _auth_err = check_token_authorization(
+            srv,
+            tool_prefixes=[
+                "hostgroup",
+                "host",
+                "problem",
+                "trigger",
+            ],
+        )
         if _auth_err:
             raise ToolError(_auth_err)
         return _raise_if_extension_error(await asyncio.to_thread(
@@ -2821,19 +3184,28 @@ def _register_tools(
         ), raw_json=bool(raw_json), tz=await asyncio.to_thread(resolve_zone, client_manager, srv))
 
     if _ext_allowed("hostgroup_overview_get"):
-        mcp.add_tool(_hostgroup_overview_get, name="hostgroup_overview_get",
-                     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
+        mcp.add_tool(
+            _hostgroup_overview_get,
+            name="hostgroup_overview_get",
+            annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+        )
         count += 1
 
     async def _infrastructure_summary_get(
         *,
-        top_n: Annotated[Optional[int], Field(description="Number of top-problematic hosts to include (default 5).")] = 5,
+        top_n: Annotated[
+            Optional[int],
+            Field(
+                description="Number of top-problematic hosts to include (default 5)."
+            ),
+        ] = 5,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
         """Whole-Zabbix dashboard summary: host / item / trigger / template counts + active-problem severity breakdown + top-N most-problematic hosts, in a single call.
 
-        Use this for 'show me the overall status' / 'is everything OK?' / 'how many problems do we have right now?' style first-look prompts. Replaces five separate count + filter calls and the LLM correlation step that local models often get wrong."""
+        Use this for 'show me the overall status' / 'is everything OK?' / 'how many problems do we have right now?' style first-look prompts. Replaces five separate count + filter calls and the LLM correlation step that local models often get wrong.
+        """
         _raw_err = _check_raw_json_allowed(bool(raw_json))
         if _raw_err:
             raise ToolError(_raw_err)
@@ -2841,9 +3213,17 @@ def _register_tools(
         # Composite read - aggregates host / item / trigger / template /
         # problem counts plus per-group breakdown. Requires scope for
         # every endpoint we sum over.
-        _auth_err = check_token_authorization(srv, tool_prefixes=[
-            "host", "hostgroup", "item", "trigger", "template", "problem",
-        ])
+        _auth_err = check_token_authorization(
+            srv,
+            tool_prefixes=[
+                "host",
+                "hostgroup",
+                "item",
+                "trigger",
+                "template",
+                "problem",
+            ],
+        )
         if _auth_err:
             raise ToolError(_auth_err)
         return _raise_if_extension_error(await asyncio.to_thread(
@@ -2851,31 +3231,57 @@ def _register_tools(
         ), raw_json=bool(raw_json), tz=await asyncio.to_thread(resolve_zone, client_manager, srv))
 
     if _ext_allowed("infrastructure_summary_get"):
-        mcp.add_tool(_infrastructure_summary_get, name="infrastructure_summary_get",
-                     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
+        mcp.add_tool(
+            _infrastructure_summary_get,
+            name="infrastructure_summary_get",
+            annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+        )
         count += 1
 
     async def _item_history_summary_get(
         *,
-        itemid: Annotated[Optional[str], Field(description="Item ID. Either itemid or (host + key) must be supplied.")] = None,
-        host: Annotated[Optional[str], Field(description="Host name (used together with key).")] = None,
-        key: Annotated[Optional[str], Field(description="Item key (used together with host).")] = None,
-        period: Annotated[Optional[str], Field(description="Time window: '1h', '6h', '1d', '7d', '30d' (default '1h').")] = "1h",
-        limit: Annotated[Optional[int], Field(description="Max history points to include (default 100).")] = 100,
+        itemid: Annotated[
+            Optional[str],
+            Field(
+                description="Item ID. Either itemid or (host + key) must be supplied."
+            ),
+        ] = None,
+        host: Annotated[
+            Optional[str], Field(description="Host name (used together with key).")
+        ] = None,
+        key: Annotated[
+            Optional[str], Field(description="Item key (used together with host).")
+        ] = None,
+        period: Annotated[
+            Optional[str],
+            Field(
+                description="Time window: '1h', '6h', '1d', '7d', '30d' (default '1h')."
+            ),
+        ] = "1h",
+        limit: Annotated[
+            Optional[int],
+            Field(description="Max history points to include (default 100)."),
+        ] = 100,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
         raw_json: Annotated[bool, Field(description=_RAW_JSON_PARAM_DESC)] = False,
     ) -> str:
         """Item metadata + last-N data points + min/max/avg statistics, in one call.
 
-        Use this for 'what was the average load on <host> over the last hour?' / 'show me memory usage trend on <host>'. Replaces the item_get + history_get + manual statistics loop the LLM has to write to answer trend questions."""
+        Use this for 'what was the average load on <host> over the last hour?' / 'show me memory usage trend on <host>'. Replaces the item_get + history_get + manual statistics loop the LLM has to write to answer trend questions.
+        """
         _raw_err = _check_raw_json_allowed(bool(raw_json))
         if _raw_err:
             raise ToolError(_raw_err)
         srv = _resolve_server_for_caller(client_manager, server or _default_server_for_caller(client_manager))
         # Composite read - item metadata + history + parent host name.
-        _auth_err = check_token_authorization(srv, tool_prefixes=[
-            "item", "history", "host",
-        ])
+        _auth_err = check_token_authorization(
+            srv,
+            tool_prefixes=[
+                "item",
+                "history",
+                "host",
+            ],
+        )
         if _auth_err:
             raise ToolError(_auth_err)
         return _raise_if_extension_error(await asyncio.to_thread(
@@ -2884,15 +3290,23 @@ def _register_tools(
         ), raw_json=bool(raw_json), tz=await asyncio.to_thread(resolve_zone, client_manager, srv))
 
     if _ext_allowed("item_history_summary_get"):
-        mcp.add_tool(_item_history_summary_get, name="item_history_summary_get",
-                     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
+        mcp.add_tool(
+            _item_history_summary_get,
+            name="item_history_summary_get",
+            annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+        )
         count += 1
 
     # ------------------------------------------------------------------
     # PDF Report generation (optional — requires weasyprint + jinja2)
     # ------------------------------------------------------------------
     try:
-        from zabbix_mcp.reporting.engine import ReportEngine, REPORTING_AVAILABLE, _REPORT_TEMPLATES
+        from zabbix_mcp.reporting.engine import (
+            ReportEngine,
+            REPORTING_AVAILABLE,
+            _REPORT_TEMPLATES,
+        )
+
         # `config` is optional on this entry point (tests register the
         # tool set without one). Everything below reads branding and
         # delivery settings off it, so skip the whole block rather than
@@ -2903,13 +3317,16 @@ def _register_tools(
             report_engine = ReportEngine(
                 logo_path=getattr(_server_cfg, "report_logo", None),
                 company_name=getattr(_server_cfg, "report_company", ""),
-                subtitle=getattr(_server_cfg, "report_subtitle", "IT Monitoring Service"),
+                subtitle=getattr(
+                    _server_cfg, "report_subtitle", "IT Monitoring Service"
+                ),
             )
 
             # Backs zabbix://reports/<id> links so a finished PDF can be
             # handed to the client as a pointer instead of a base64 blob
             # in the model's context (issue #68).
             from zabbix_mcp.reporting.store import ReportStore
+
             report_store = ReportStore(
                 ttl_s=config.reporting.link_ttl,
                 max_reports=config.reporting.link_max_reports,
@@ -2927,9 +3344,12 @@ def _register_tools(
 
             # Serve the stored PDFs behind their links, registered in the
             # scope that owns the store.
-            @mcp.resource("zabbix://reports/{report_id}", mime_type="application/pdf",
-                          name="Generated report",
-                          description="A PDF report produced by report_generate. Expires after the configured link lifetime.")
+            @mcp.resource(
+                "zabbix://reports/{report_id}",
+                mime_type="application/pdf",
+                name="Generated report",
+                description="A PDF report produced by report_generate. Expires after the configured link lifetime.",
+            )
             async def resource_report(report_id: str) -> bytes:
                 """Return the stored PDF for a zabbix://reports/<id> link."""
                 item = report_store.get(report_id)
@@ -2941,27 +3361,41 @@ def _register_tools(
 
             logger.info(
                 "Registered MCP resource template (zabbix://reports/{id}, ttl %ds, max %d)",
-                config.reporting.link_ttl, config.reporting.link_max_reports,
+                config.reporting.link_ttl,
+                config.reporting.link_max_reports,
             )
 
             # Load custom templates from [report_templates.*] config sections
             try:
-                from zabbix_mcp.admin.config_writer import load_config_document as _load_cfg_doc, TOMLKIT_AVAILABLE as _TK
+                from zabbix_mcp.admin.config_writer import (
+                    load_config_document as _load_cfg_doc,
+                    TOMLKIT_AVAILABLE as _TK,
+                )
+
                 if _TK:
                     _cfg_path = getattr(config, "_config_path", None)
                     if _cfg_path:
                         _cfg_doc = _load_cfg_doc(_cfg_path)
                         _custom_tmpls = _cfg_doc.get("report_templates", {})
                         if _custom_tmpls:
-                            report_engine.load_custom_templates({k: dict(v) for k, v in _custom_tmpls.items()})
-                            logger.info("Loaded %d custom report templates", len(_custom_tmpls))
+                            report_engine.load_custom_templates(
+                                {k: dict(v) for k, v in _custom_tmpls.items()}
+                            )
+                            logger.info(
+                                "Loaded %d custom report templates", len(_custom_tmpls)
+                            )
             except Exception as _e:
                 logger.warning("Failed to load custom report templates: %s", _e)
 
             async def _report_generate_work(
-                *, report_type: str, hostgroupid: str,
-                period: str | None, company: str | None, server: str | None,
-                save_to_file: bool = False, email_to: list[str] | str | None = None,
+                *,
+                report_type: str,
+                hostgroupid: str,
+                period: str | None,
+                company: str | None,
+                server: str | None,
+                save_to_file: bool = False,
+                email_to: list[str] | str | None = None,
                 as_link: bool = True,
             ) -> str | CallToolResult:
                 """Synchronous PDF generation - shared between sync and task-augmented paths."""
@@ -2973,13 +3407,18 @@ def _register_tools(
 
                 valid_types = tuple(_REPORT_TEMPLATES.keys())
                 if report_type not in valid_types:
-                    raise ToolError(f"Invalid report_type. Must be one of: {', '.join(valid_types)}")
+                    raise ToolError(
+                        f"Invalid report_type. Must be one of: {', '.join(valid_types)}"
+                    )
 
                 try:
                     import re as _re
+
                     _period_match = _re.match(r"^(\d+)([dhm])$", period or "30d")
                     if not _period_match:
-                        raise ToolError("Invalid period format. Use e.g. '7d', '30d', '90d'.")
+                        raise ToolError(
+                            "Invalid period format. Use e.g. '7d', '30d', '90d'."
+                        )
                     _amount, _unit = int(_period_match.group(1)), _period_match.group(2)
                     _delta = {"d": 86400, "h": 3600, "m": 60}[_unit] * _amount
                     _period_to = int(time.time())
@@ -3007,9 +3446,12 @@ def _register_tools(
                     from zabbix_mcp.reporting.delivery import (
                         build_filename as _delivery_filename,
                     )
+
                     recipients = email_to
                     if isinstance(recipients, str):
-                        recipients = [r.strip() for r in recipients.split(",") if r.strip()]
+                        recipients = [
+                            r.strip() for r in recipients.split(",") if r.strip()
+                        ]
                     recipients = list(recipients or [])
 
                     summary: dict[str, Any] = {
@@ -3020,12 +3462,15 @@ def _register_tools(
 
                     if save_to_file or recipients:
                         from zabbix_mcp.reporting import delivery as _delivery
+
                         filename = _delivery.build_filename(report_type, hostgroupid)
                         if save_to_file:
                             try:
                                 summary["saved_to"] = await asyncio.to_thread(
                                     _delivery.save_report,
-                                    pdf_bytes, config.reporting.output_dir, filename,
+                                    pdf_bytes,
+                                    config.reporting.output_dir,
+                                    filename,
                                 )
                             except _delivery.DeliveryError as exc:
                                 raise ToolError(str(exc))
@@ -3034,15 +3479,25 @@ def _register_tools(
                             try:
                                 summary["emailed_to"] = await asyncio.to_thread(
                                     _delivery.send_report_email,
-                                    pdf_bytes, filename, recipients,
+                                    pdf_bytes,
+                                    filename,
+                                    recipients,
                                     email_config=config.reporting.email,
                                     subject=(
                                         f"Zabbix {report_type} report ({_period_label})"
                                         # Only append the company when there is one -
                                         # otherwise the subject ends in a dangling dash.
-                                        + (f" - {_company}"
-                                           if (_company := (company or report_engine.company_name or "").strip())
-                                           else "")
+                                        + (
+                                            f" - {_company}"
+                                            if (
+                                                _company := (
+                                                    company
+                                                    or report_engine.company_name
+                                                    or ""
+                                                ).strip()
+                                            )
+                                            else ""
+                                        )
                                     ),
                                     body=(
                                         f"Attached: {report_type} report for host group "
@@ -3070,7 +3525,11 @@ def _register_tools(
                     # only to discard the string would allocate ~1.37x the
                     # PDF and block the event loop on every single call.
                     _encoded_len = -(-len(pdf_bytes) // 3) * 4
-                    _limit = getattr(config.server, "response_max_chars", 50000) if config else 50000
+                    _limit = (
+                        getattr(config.server, "response_max_chars", 50000)
+                        if config
+                        else 50000
+                    )
                     if as_link or _encoded_len > _limit:
                         filename = _delivery_filename(report_type, hostgroupid)
                         rid = report_store.put(pdf_bytes, filename)
@@ -3083,7 +3542,9 @@ def _register_tools(
                         download_url = None
                         _no_url_reason = None
                         if config is not None and config.reporting.download_urls:
-                            base, _no_url_reason = _report_download_base(config, transport)
+                            base, _no_url_reason = _report_download_base(
+                                config, transport
+                            )
                             if base:
                                 download_url = f"{base}/reports/{rid}.pdf"
                                 summary["download_url"] = download_url
@@ -3092,8 +3553,11 @@ def _register_tools(
                         summary["note"] = (
                             "Delivered as a link so the PDF stays out of the conversation "
                             f"context. Expires in {_mins} minutes. "
-                            + ("Give the user the download_url - it opens in a browser. "
-                               if download_url else "")
+                            + (
+                                "Give the user the download_url - it opens in a browser. "
+                                if download_url
+                                else ""
+                            )
                             + "MCP clients can also read the report_uri resource directly."
                         )
                         if _no_url_reason:
@@ -3110,18 +3574,20 @@ def _register_tools(
                         )
                         if download_url:
                             _desc += f". Download: {download_url}"
-                        return CallToolResult(content=[
-                            TextContent(type="text", text=json.dumps(summary)),
-                            ResourceLink(
-                                type="resource_link",
-                                uri=uri,
-                                name=filename,
-                                title=f"Zabbix {report_type} report",
-                                description=_desc,
-                                mimeType="application/pdf",
-                                size=len(pdf_bytes),
-                            ),
-                        ])
+                        return CallToolResult(
+                            content=[
+                                TextContent(type="text", text=json.dumps(summary)),
+                                ResourceLink(
+                                    type="resource_link",
+                                    uri=uri,
+                                    name=filename,
+                                    title=f"Zabbix {report_type} report",
+                                    description=_desc,
+                                    mimeType="application/pdf",
+                                    size=len(pdf_bytes),
+                                ),
+                            ]
+                        )
 
                     summary["report"] = (
                         f"data:application/pdf;base64,"
@@ -3131,7 +3597,9 @@ def _register_tools(
                 except ToolError:
                     raise
                 except Exception as exc:
-                    logger.exception("Report generation failed for type '%s'", report_type)
+                    logger.exception(
+                        "Report generation failed for type '%s'", report_type
+                    )
                     # Do NOT echo the raw exception - WeasyPrint /
                     # Jinja2 messages can include absolute filesystem
                     # paths and template line numbers, which leaks
@@ -3141,14 +3609,46 @@ def _register_tools(
 
             async def _report_generate(
                 *,
-                report_type: Annotated[str, Field(description="Report type: 'availability', 'capacity_host', 'capacity_network', 'backup'")],
-                hostgroupid: Annotated[str, Field(description="Host group ID to include in the report")],
-                period: Annotated[Optional[str], Field(description="Report period: '7d', '30d', '90d' (default: '30d')")] = "30d",
-                company: Annotated[Optional[str], Field(description="Company name for report header (overrides config)")] = None,
+                report_type: Annotated[
+                    str,
+                    Field(
+                        description="Report type: 'availability', 'capacity_host', 'capacity_network', 'backup'"
+                    ),
+                ],
+                hostgroupid: Annotated[
+                    str, Field(description="Host group ID to include in the report")
+                ],
+                period: Annotated[
+                    Optional[str],
+                    Field(
+                        description="Report period: '7d', '30d', '90d' (default: '30d')"
+                    ),
+                ] = "30d",
+                company: Annotated[
+                    Optional[str],
+                    Field(
+                        description="Company name for report header (overrides config)"
+                    ),
+                ] = None,
                 server: Annotated[Optional[str], Field(description=server_desc)] = None,
-                save_to_file: Annotated[bool, Field(description="Write the PDF to the server's configured report directory instead of returning it inline. Requires [reporting].output_dir. Returns the path.")] = False,
-                email_to: Annotated[Optional[str], Field(description="Comma-separated recipients to email the PDF to as an attachment instead of returning it inline. Requires [reporting.email] and each address must match the operator's allowed_recipients.")] = None,
-                as_link: Annotated[bool, Field(description="Default true: return a link (an https download_url the user can click, plus the zabbix://reports/<id> MCP resource) instead of the PDF itself, so the document stays out of the conversation context. Set false to force the inline base64 data URI, which is only practical for small reports.")] = True,
+                save_to_file: Annotated[
+                    bool,
+                    Field(
+                        description="Write the PDF to the server's configured report directory instead of returning it inline. Requires [reporting].output_dir. Returns the path."
+                    ),
+                ] = False,
+                email_to: Annotated[
+                    Optional[str],
+                    Field(
+                        description="Comma-separated recipients to email the PDF to as an attachment instead of returning it inline. Requires [reporting.email] and each address must match the operator's allowed_recipients."
+                    ),
+                ] = None,
+                as_link: Annotated[
+                    bool,
+                    Field(
+                        description="Default true: return a link (an https download_url the user can click, plus the zabbix://reports/<id> MCP resource) instead of the PDF itself, so the document stays out of the conversation context. Set false to force the inline base64 data URI, which is only practical for small reports."
+                    ),
+                ] = True,
             ):
                 """Generate a PDF report from Zabbix monitoring data. Supported report
                 types: availability (SLA/uptime), capacity_host (CPU/memory/disk),
@@ -3178,14 +3678,20 @@ def _register_tools(
                 # here the call is always synchronous.
 
                 return await _report_generate_work(
-                    save_to_file=save_to_file, email_to=email_to, as_link=as_link,
-                    report_type=report_type, hostgroupid=hostgroupid,
-                    period=period, company=company, server=server,
+                    save_to_file=save_to_file,
+                    email_to=email_to,
+                    as_link=as_link,
+                    report_type=report_type,
+                    hostgroupid=hostgroupid,
+                    period=period,
+                    company=company,
+                    server=server,
                 )
 
             if _ext_allowed("report_generate"):
                 mcp.add_tool(
-                    _report_generate, name="report_generate",
+                    _report_generate,
+                    name="report_generate",
                     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
                 )
                 count += 1
@@ -3209,8 +3715,15 @@ def _register_tools(
 
     async def action_prepare(
         *,
-        action: Annotated[str, Field(description="Zabbix API method to execute (e.g. 'maintenance.create', 'host.massupdate')")],
-        params: Annotated[dict, Field(description="API method parameters as JSON object")],
+        action: Annotated[
+            str,
+            Field(
+                description="Zabbix API method to execute (e.g. 'maintenance.create', 'host.massupdate')"
+            ),
+        ],
+        params: Annotated[
+            dict, Field(description="API method parameters as JSON object")
+        ],
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
     ) -> str:
         """Prepare a write action for review before execution. Returns a preview
@@ -3235,6 +3748,7 @@ def _register_tools(
 
         # Bind to caller token for security (prevent cross-token confirmation)
         from zabbix_mcp.token_store import current_token_info as _cti
+
         _caller_token = _cti.get()
         _caller_id = _caller_token.id if _caller_token else None
 
@@ -3262,34 +3776,50 @@ def _register_tools(
         # private_key, secret, and similar Zabbix-side credential
         # fields visible to the LLM.
         _SECRET_NAME_FRAGMENTS = (
-            "password", "passwd", "secret", "token", "api_token",
-            "private_key", "psk", "credential", "auth", "bearer",
+            "password",
+            "passwd",
+            "secret",
+            "token",
+            "api_token",
+            "private_key",
+            "psk",
+            "credential",
+            "auth",
+            "bearer",
         )
+
         def _redact(k: str, v: Any) -> Any:
             kl = k.lower()
             if any(frag in kl for frag in _SECRET_NAME_FRAGMENTS):
                 return "***REDACTED***"
             return v
-        return json.dumps({
-            "status": "pending_confirmation",
-            "confirmation_token": token,
-            "action": action,
-            "server": srv,
-            "params_preview": {k: _redact(k, v) for k, v in params.items()},
-            "expires_in_seconds": 300,
-            "message": "Review the action above. Call action_confirm with the token to execute.",
-        }, indent=2)
+
+        return json.dumps(
+            {
+                "status": "pending_confirmation",
+                "confirmation_token": token,
+                "action": action,
+                "server": srv,
+                "params_preview": {k: _redact(k, v) for k, v in params.items()},
+                "expires_in_seconds": 300,
+                "message": "Review the action above. Call action_confirm with the token to execute.",
+            },
+            indent=2,
+        )
 
     if _ext_allowed("action_prepare"):
         mcp.add_tool(
-            action_prepare, name="action_prepare",
+            action_prepare,
+            name="action_prepare",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
         )
         count += 1
 
     async def action_confirm(
         *,
-        confirmation_token: Annotated[str, Field(description="Token from action_prepare response")],
+        confirmation_token: Annotated[
+            str, Field(description="Token from action_prepare response")
+        ],
     ) -> str:
         """Execute a previously prepared action. The confirmation token must match
         an active (non-expired) prepared action and be from the same caller."""
@@ -3303,10 +3833,13 @@ def _register_tools(
 
         # Verify caller identity matches the preparer
         from zabbix_mcp.token_store import current_token_info as _cti
+
         _caller_token = _cti.get()
         _caller_id = _caller_token.id if _caller_token else None
         if action_data.get("caller_token_id") != _caller_id:
-            raise ToolError("Confirmation token was prepared by a different caller. Access denied.")
+            raise ToolError(
+                "Confirmation token was prepared by a different caller. Access denied."
+            )
 
         if action_data["expires"] < time.time():
             raise ToolError("Confirmation token has expired. Prepare the action again.")
@@ -3326,25 +3859,34 @@ def _register_tools(
 
         try:
             result = await asyncio.to_thread(
-                client_manager.call, action_data["server"],
-                action_data["action"], action_data["params"],
+                client_manager.call,
+                action_data["server"],
+                action_data["action"],
+                action_data["params"],
             )
-            return _UNTRUSTED_PREAMBLE + json.dumps({
-                "status": "executed",
-                "action": action_data["action"],
-                "server": action_data["server"],
-                "result": result,
-            })
+            return _UNTRUSTED_PREAMBLE + json.dumps(
+                {
+                    "status": "executed",
+                    "action": action_data["action"],
+                    "server": action_data["server"],
+                    "result": result,
+                }
+            )
         except ToolError:
             raise
         except Exception as exc:
             logger.exception("Action execution failed: %s", action_data["action"])
-            raise ToolError(f"Execution failed: {exc} (action: {action_data['action']})")
+            raise ToolError(
+                f"Execution failed: {exc} (action: {action_data['action']})"
+            )
 
     if _ext_allowed("action_confirm"):
         mcp.add_tool(
-            action_confirm, name="action_confirm",
-            annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True),
+            action_confirm,
+            name="action_confirm",
+            annotations=ToolAnnotations(
+                readOnlyHint=False, destructiveHint=True, openWorldHint=True
+            ),
         )
         count += 1
 
@@ -3377,6 +3919,7 @@ class _IPAllowlistMiddleware:
 
     def __init__(self, app: Any, allowed: list[str]) -> None:
         import ipaddress
+
         self._app = app
         self._networks: list[Any] = []
         for entry in allowed:
@@ -3388,21 +3931,26 @@ class _IPAllowlistMiddleware:
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] in ("http", "websocket"):
             import ipaddress
+
             client = scope.get("client")
             if client:
                 client_ip = ipaddress.ip_address(client[0])
                 if not any(client_ip in net for net in self._networks):
                     # Reject with 403 Forbidden
                     if scope["type"] == "http":
-                        await send({
-                            "type": "http.response.start",
-                            "status": 403,
-                            "headers": [[b"content-type", b"application/json"]],
-                        })
-                        await send({
-                            "type": "http.response.body",
-                            "body": b'{"error": true, "message": "Forbidden"}',
-                        })
+                        await send(
+                            {
+                                "type": "http.response.start",
+                                "status": 403,
+                                "headers": [[b"content-type", b"application/json"]],
+                            }
+                        )
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": b'{"error": true, "message": "Forbidden"}',
+                            }
+                        )
                         return
                     # For websocket, close immediately
                     await send({"type": "websocket.close", "code": 1008})
@@ -3486,19 +4034,21 @@ def run_server(
 ) -> None:
     """Create and run the MCP server."""
     # Store runtime port for admin portal MCP health check
-    object.__setattr__(config, '_runtime_port', port)
+    object.__setattr__(config, "_runtime_port", port)
 
     # Migrate custom report templates from the legacy v1.16 location to the
     # current v1.17+ location. For host installs deploy/install.sh handles
     # this, but container deployments do not use the installer so we run it
     # here. No-op if there is nothing to migrate.
     from zabbix_mcp.template_migration import migrate_custom_templates
+
     migrate_custom_templates(getattr(config, "_config_path", None))
 
     # Bootstrap a first-run admin user if the admin portal is enabled but no
     # users exist yet. Host installs get this from install.sh setup_admin;
     # container deployments need it done here. No-op on subsequent restarts.
     from zabbix_mcp.admin_bootstrap import bootstrap_admin_if_needed
+
     bootstrap_admin_if_needed(getattr(config, "_config_path", None))
 
     client_manager = ClientManager(config)
@@ -3509,35 +4059,52 @@ def run_server(
 
     # Initialize token store (multi-token auth)
     from zabbix_mcp.token_store import TokenStore, MultiTokenVerifier
+
     token_store = TokenStore()
 
     # Load tokens from [tokens.*] config sections
     try:
-        from zabbix_mcp.admin.config_writer import load_config_document, TOMLKIT_AVAILABLE
+        from zabbix_mcp.admin.config_writer import (
+            load_config_document,
+            TOMLKIT_AVAILABLE,
+        )
+
         if TOMLKIT_AVAILABLE:
             config_path = getattr(config, "_config_path", None)
             if config_path:
                 doc = load_config_document(config_path)
                 tokens_raw = doc.get("tokens", {})
                 if tokens_raw:
-                    token_store.load_from_config({k: dict(v) for k, v in tokens_raw.items()})
-                    logger.info("Loaded %d MCP tokens from config", token_store.token_count)
+                    token_store.load_from_config(
+                        {k: dict(v) for k, v in tokens_raw.items()}
+                    )
+                    logger.info(
+                        "Loaded %d MCP tokens from config", token_store.token_count
+                    )
     except Exception as e:
         logger.warning("Failed to load tokens from config: %s", e)
 
     # Legacy auth_token fallback — also persist to config so it survives token reload
     if config.server.auth_token and token_store.token_count == 0:
         token_store.load_legacy_token(config.server.auth_token)
-        logger.info("Using legacy auth_token (migrate to [tokens] for multi-token support)")
+        logger.info(
+            "Using legacy auth_token (migrate to [tokens] for multi-token support)"
+        )
         # Write legacy token to config.toml so it persists across reloads
         config_path = getattr(config, "_config_path", None)
         if config_path:
             try:
-                from zabbix_mcp.admin.config_writer import load_config_document, save_config_document, TOMLKIT_AVAILABLE
+                from zabbix_mcp.admin.config_writer import (
+                    load_config_document,
+                    save_config_document,
+                    TOMLKIT_AVAILABLE,
+                )
+
                 if TOMLKIT_AVAILABLE:
                     doc = load_config_document(config_path)
                     if "tokens" not in doc or "legacy" not in doc.get("tokens", {}):
                         import tomlkit, hashlib
+
                         if "tokens" not in doc:
                             doc.add("tokens", tomlkit.table(is_super_table=True))
                         legacy_hash = f"sha256:{hashlib.sha256(config.server.auth_token.encode()).hexdigest()}"
@@ -3549,7 +4116,9 @@ def run_server(
                         legacy_table["is_legacy"] = True
                         doc["tokens"]["legacy"] = legacy_table
                         save_config_document(config_path, doc)
-                        logger.info("Legacy auth_token persisted to [tokens.legacy] in config")
+                        logger.info(
+                            "Legacy auth_token persisted to [tokens.legacy] in config"
+                        )
             except Exception as e:
                 logger.warning("Could not persist legacy token to config: %s", e)
 
@@ -3557,9 +4126,7 @@ def run_server(
     auth_kwargs: dict[str, Any] = {}
     oauth_provider = None  # set below when [oauth].enabled
     has_auth = (
-        token_store.token_count > 0
-        or config.server.auth_token
-        or config.oauth.enabled
+        token_store.token_count > 0 or config.server.auth_token or config.oauth.enabled
     )
     if has_auth and transport in ("http", "sse"):
         # Prefer the operator's explicit public URL when set (deployments
@@ -3572,13 +4139,17 @@ def run_server(
 
         if config.oauth.enabled:
             from zabbix_mcp.oauth_provider import ZmcpOAuthProvider
-            from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+            from mcp.server.auth.settings import (
+                ClientRegistrationOptions,
+                RevocationOptions,
+            )
 
             cfg_path_for_oauth = getattr(config, "_config_path", None)
 
             def _load_clients() -> dict[str, Any]:
                 """Hydrate the in-memory client table from [oauth_clients.*]."""
                 from mcp.shared.auth import OAuthClientInformationFull
+
                 if not cfg_path_for_oauth:
                     return {}
                 try:
@@ -3599,7 +4170,9 @@ def run_server(
                     try:
                         ci = OAuthClientInformationFull.model_validate(body)
                     except Exception as exc:
-                        logger.warning("Skipping malformed [oauth_clients.%s]: %s", cid, exc)
+                        logger.warning(
+                            "Skipping malformed [oauth_clients.%s]: %s", cid, exc
+                        )
                         continue
                     if allowed_ips:
                         object.__setattr__(ci, "_allowed_ips", list(allowed_ips))
@@ -3615,20 +4188,28 @@ def run_server(
                 if not cfg_path_for_oauth:
                     return
                 from zabbix_mcp.admin.config_writer import add_config_table
+
                 # OAuthClientInformationFull -> serializable dict
                 body = client_info.model_dump(mode="json", exclude_none=True)
                 # Tomlkit cannot store None; ensure no nulls slipped in.
                 body = {k: v for k, v in body.items() if v is not None}
                 try:
-                    add_config_table(cfg_path_for_oauth, "oauth_clients",
-                                     str(client_info.client_id), body)
+                    add_config_table(
+                        cfg_path_for_oauth,
+                        "oauth_clients",
+                        str(client_info.client_id),
+                        body,
+                    )
                 except ValueError:
                     # Already registered: update in place via sub-table replace.
                     from zabbix_mcp.admin.config_writer import (
-                        load_config_document, save_config_document,
+                        load_config_document,
+                        save_config_document,
                     )
+
                     doc = load_config_document(cfg_path_for_oauth)
                     import tomlkit
+
                     if "oauth_clients" not in doc:
                         doc.add("oauth_clients", tomlkit.table(is_super_table=True))
                     sub = tomlkit.table()
@@ -3642,9 +4223,12 @@ def run_server(
                 # to raise a false "restart needed" banner (issue #69).
                 try:
                     from zabbix_mcp.admin.app import refresh_config_baseline
+
                     refresh_config_baseline()
                 except Exception:
-                    logger.debug("Could not refresh admin restart baseline", exc_info=True)
+                    logger.debug(
+                        "Could not refresh admin restart baseline", exc_info=True
+                    )
 
             oauth_provider = ZmcpOAuthProvider(
                 public_url=server_url,
@@ -3673,20 +4257,23 @@ def run_server(
                     "OAuth metadata will advertise '%s' which most remote MCP "
                     "clients (Claude Desktop, ChatGPT custom apps) will not be "
                     "able to reach. Set public_url to the externally-reachable "
-                    "https URL (e.g. \"https://mcp.example.com\").",
+                    'https URL (e.g. "https://mcp.example.com").',
                     server_url,
                 )
             logger.info(
                 "MCP auth: OAuth 2.1 authorization server enabled (issuer %s, "
                 "login at %s, dynamic registration: %s)",
-                server_url, config.oauth.login_path,
+                server_url,
+                config.oauth.login_path,
                 "yes" if config.oauth.dynamic_registration_enabled else "no",
             )
         else:
             if token_store.token_count > 0:
                 auth_kwargs["token_verifier"] = MultiTokenVerifier(token_store)
             else:
-                auth_kwargs["token_verifier"] = _BearerTokenVerifier(config.server.auth_token)
+                auth_kwargs["token_verifier"] = _BearerTokenVerifier(
+                    config.server.auth_token
+                )
             auth_kwargs["auth"] = AuthSettings(
                 issuer_url=server_url,
                 resource_server_url=server_url,
@@ -3704,8 +4291,9 @@ def run_server(
                         "Bind host is %s but [server].public_url is not set - OAuth "
                         "discovery will advertise '%s' which remote MCP clients "
                         "cannot reach. Set public_url to the externally-reachable "
-                        "URL (e.g. \"https://mcp.example.com:8080\").",
-                        host, server_url,
+                        'URL (e.g. "https://mcp.example.com:8080").',
+                        host,
+                        server_url,
                     )
     elif transport in ("http", "sse") and not config.server.auth_token:
         if host == "127.0.0.1":
@@ -3726,20 +4314,30 @@ def run_server(
 
         # Authentication: legacy auth_token OR new [tokens.*] multi-token system
         if token_store.token_count > 0:
-            logger.warning("  MCP auth:           ENABLED (%d token(s) from [tokens.*])", token_store.token_count)
+            logger.warning(
+                "  MCP auth:           ENABLED (%d token(s) from [tokens.*])",
+                token_store.token_count,
+            )
         elif config.server.auth_token:
             logger.warning("  MCP auth:           ENABLED (legacy auth_token)")
         elif host == "127.0.0.1":
             logger.warning("  MCP auth:           not set (localhost only - OK)")
         else:
-            logger.warning("  MCP auth:           DISABLED - server is unauthenticated!")
+            logger.warning(
+                "  MCP auth:           DISABLED - server is unauthenticated!"
+            )
 
         # TLS
         if config.server.tls_cert_file:
-            logger.warning("  TLS:                ENABLED (cert: %s)", config.server.tls_cert_file)
+            logger.warning(
+                "  TLS:                ENABLED (cert: %s)", config.server.tls_cert_file
+            )
         else:
             if host != "127.0.0.1":
-                logger.warning("  TLS:                DISABLED — traffic is unencrypted on %s!", host)
+                logger.warning(
+                    "  TLS:                DISABLED — traffic is unencrypted on %s!",
+                    host,
+                )
             else:
                 logger.warning("  TLS:                disabled (localhost only)")
 
@@ -3748,21 +4346,33 @@ def run_server(
         # follow the discovery URL - flag it loudly.
         public_url_cfg = (getattr(config.server, "public_url", "") or "").strip()
         if public_url_cfg:
-            logger.warning("  Public URL:         %s (from [server].public_url)", public_url_cfg)
+            logger.warning(
+                "  Public URL:         %s (from [server].public_url)", public_url_cfg
+            )
         elif host in ("0.0.0.0", "::"):
             logger.warning(
                 "  Public URL:         NOT SET - OAuth discovery advertises '%s://%s:%d/' "
                 "which remote MCP clients (Claude Desktop, mcp-remote, ...) cannot reach. "
                 "Set [server].public_url in config.toml or via the admin portal "
                 "Settings -> MCP Server -> Public URL.",
-                scheme, host, port,
+                scheme,
+                host,
+                port,
             )
         else:
-            logger.warning("  Public URL:         auto-derived from %s://%s:%d/", scheme, host, port)
+            logger.warning(
+                "  Public URL:         auto-derived from %s://%s:%d/",
+                scheme,
+                host,
+                port,
+            )
 
         # IP allowlist
         if config.server.allowed_hosts:
-            logger.warning("  IP allowlist:       ENABLED (%d entries)", len(config.server.allowed_hosts))
+            logger.warning(
+                "  IP allowlist:       ENABLED (%d entries)",
+                len(config.server.allowed_hosts),
+            )
         else:
             logger.warning("  IP allowlist:       DISABLED — no IP restrictions")
 
@@ -3770,20 +4380,30 @@ def run_server(
         if config.server.cors_origins is None:
             logger.warning("  CORS:               disabled (no cross-origin access)")
         elif "*" in config.server.cors_origins:
-            logger.warning("  CORS:               WILDCARD '*' — any origin can access this server!")
+            logger.warning(
+                "  CORS:               WILDCARD '*' — any origin can access this server!"
+            )
         else:
-            logger.warning("  CORS:               ENABLED (%d origins)", len(config.server.cors_origins))
+            logger.warning(
+                "  CORS:               ENABLED (%d origins)",
+                len(config.server.cors_origins),
+            )
 
         # Rate limiting
         if config.server.rate_limit > 0:
-            logger.warning("  Rate limit:         %d calls/min per client", config.server.rate_limit)
+            logger.warning(
+                "  Rate limit:         %d calls/min per client",
+                config.server.rate_limit,
+            )
         else:
             logger.warning("  Rate limit:         DISABLED — no request throttling")
 
         # Read-only status per Zabbix server
         writable = [n for n, s in config.zabbix_servers.items() if not s.read_only]
         if writable:
-            logger.warning("  Read-only:          DISABLED for: %s", ", ".join(writable))
+            logger.warning(
+                "  Read-only:          DISABLED for: %s", ", ".join(writable)
+            )
         else:
             logger.warning("  Read-only:          all servers read-only")
 
@@ -3796,7 +4416,10 @@ def run_server(
 
         # File import sandbox
         if config.server.allowed_import_dirs:
-            logger.warning("  source_file:        ENABLED (%d directories)", len(config.server.allowed_import_dirs))
+            logger.warning(
+                "  source_file:        ENABLED (%d directories)",
+                len(config.server.allowed_import_dirs),
+            )
         else:
             logger.warning("  source_file:        disabled (secure default)")
 
@@ -3817,7 +4440,8 @@ def run_server(
         if warnings:
             logger.warning(
                 "  Review disabled security features above. "
-                "Adjust in config.toml: %s", ", ".join(warnings),
+                "Adjust in config.toml: %s",
+                ", ".join(warnings),
             )
         else:
             logger.info("  All security features are properly configured.")
@@ -3853,6 +4477,7 @@ def run_server(
     # tasks/cancel are served as extension methods (tasks/list is gone per
     # the 2026-07-28 redesign).
     from zabbix_mcp.task_store import BoundedInMemoryTaskStore, build_tasks_extension
+
     _task_store = BoundedInMemoryTaskStore()
     _tasks_extension = build_tasks_extension(_task_store, set(_TASK_AUGMENTED_TOOLS))
 
@@ -3923,7 +4548,8 @@ def run_server(
         return result
 
     mcp._lowlevel_server.add_request_handler(
-        "tools/list", _orig_entry.params_type, _list_tools_with_execution)
+        "tools/list", _orig_entry.params_type, _list_tools_with_execution
+    )
 
     tool_count = _register_tools(
         mcp, client_manager, config.server.tools, config.server.disabled_tools,
@@ -3952,7 +4578,6 @@ def run_server(
         logger.info("Registered %d tools", tool_count)
 
     _register_resources(mcp, client_manager)
-
 
     # HTTP health endpoint (unauthenticated, returns minimal info only)
     if transport in ("http", "sse"):
@@ -3995,23 +4620,30 @@ def run_server(
                     "report id acts as a password and the PDF is unencrypted in "
                     "transit. Terminate TLS in front of the server and set "
                     "[server].public_url to the https address, or disable "
-                    "[reporting].download_urls.", _pub or f"http://{host}:{port}")
+                    "[reporting].download_urls.",
+                    _pub or f"http://{host}:{port}",
+                )
             elif not _pub:
                 logger.warning(
                     "Report download URLs are enabled but [server].public_url is not "
                     "set, so no link can be built unless a proxy listed in "
                     "trusted_proxies sends X-Forwarded-Host and X-Forwarded-Proto. "
-                    "Reports will be delivered as MCP resource links only.")
+                    "Reports will be delivered as MCP resource links only."
+                )
 
             @mcp.custom_route("/reports/{report_id}.pdf", methods=["GET"])
             async def http_report_download(request: Request):
                 store = getattr(config, "_report_store", None)
                 if store is None:
-                    return _StarletteResponse("Report downloads are not available.", status_code=404)
+                    return _StarletteResponse(
+                        "Report downloads are not available.", status_code=404
+                    )
                 item = store.get(request.path_params["report_id"])
                 if item is None:
                     return _StarletteResponse(
-                        "This report link has expired or does not exist.", status_code=404)
+                        "This report link has expired or does not exist.",
+                        status_code=404,
+                    )
                 pdf_bytes, filename = item
                 return _StarletteResponse(
                     pdf_bytes,
@@ -4044,7 +4676,9 @@ def run_server(
             @mcp.custom_route(login_path, methods=["GET", "POST"])
             async def http_oauth_login(request: Request):
                 return await handle_oauth_login(
-                    request, oauth_provider, config,
+                    request,
+                    oauth_provider,
+                    config,
                 )
 
             @mcp.custom_route("/static/{filename:path}", methods=["GET"])
@@ -4068,7 +4702,9 @@ def run_server(
         if transport in ("http", "sse"):
             # Build the ASGI app from MCPServer for full control over TLS and CORS
             if transport == "http":
-                asgi_app = mcp.streamable_http_app(transport_security=transport_security)
+                asgi_app = mcp.streamable_http_app(
+                    transport_security=transport_security
+                )
             else:
                 asgi_app = mcp.sse_app()
 
@@ -4081,6 +4717,7 @@ def run_server(
             if _task_store is not None:
                 from contextlib import asynccontextmanager
                 from zabbix_mcp.task_store import run_periodic_cleanup as _run_cleanup
+
                 _orig_lifespan_ctx = asgi_app.router.lifespan_context
 
                 @asynccontextmanager
@@ -4104,16 +4741,20 @@ def run_server(
             # otherwise the raw TCP peer is used so an untrusted client
             # cannot impersonate an arbitrary IP via XFF.
             asgi_app = _make_request_context_middleware(
-                asgi_app, config.server.trusted_proxies or [])
+                asgi_app, config.server.trusted_proxies or []
+            )
 
             # Apply IP allowlist middleware if configured
             if config.server.allowed_hosts:
                 asgi_app = _IPAllowlistMiddleware(asgi_app, config.server.allowed_hosts)
-                logger.info("IP allowlist enabled: %s", ", ".join(config.server.allowed_hosts))
+                logger.info(
+                    "IP allowlist enabled: %s", ", ".join(config.server.allowed_hosts)
+                )
 
             # Apply CORS middleware if configured
             if config.server.cors_origins is not None:
                 from starlette.middleware.cors import CORSMiddleware
+
                 asgi_app = CORSMiddleware(
                     app=asgi_app,
                     allow_origins=config.server.cors_origins,
@@ -4121,7 +4762,10 @@ def run_server(
                     allow_headers=["Authorization", "Content-Type"],
                     allow_credentials=True,
                 )
-                logger.info("CORS enabled for origins: %s", ", ".join(config.server.cors_origins))
+                logger.info(
+                    "CORS enabled for origins: %s",
+                    ", ".join(config.server.cors_origins),
+                )
 
             # Run with uvicorn (supports TLS natively)
             import uvicorn
@@ -4144,7 +4788,11 @@ def run_server(
 
             if config_path:
                 try:
-                    from zabbix_mcp.admin.config_writer import load_config_document, TOMLKIT_AVAILABLE
+                    from zabbix_mcp.admin.config_writer import (
+                        load_config_document,
+                        TOMLKIT_AVAILABLE,
+                    )
+
                     if TOMLKIT_AVAILABLE:
                         doc = load_config_document(config_path)
                         admin_section = doc.get("admin", {})
@@ -4158,6 +4806,7 @@ def run_server(
                 admin_host = host
 
                 from zabbix_mcp.admin.app import AdminApp
+
                 admin_app_instance = AdminApp(
                     config=config,
                     config_path=config_path,
@@ -4182,12 +4831,15 @@ def run_server(
 
                 def _run_admin():
                     import uvicorn as admin_uvicorn
+
                     admin_uvicorn.run(admin_app_instance.app, **admin_uvicorn_kwargs)
 
                 admin_thread = threading.Thread(target=_run_admin, daemon=True)
                 admin_thread.start()
                 admin_scheme = "https" if config.server.tls_cert_file else "http"
-                logger.info("Admin portal: %s://%s:%d/", admin_scheme, admin_host, admin_port)
+                logger.info(
+                    "Admin portal: %s://%s:%d/", admin_scheme, admin_host, admin_port
+                )
 
             logger.info("#### Zabbix MCP Server started successfully ####")
             uvicorn.run(asgi_app, **uvicorn_kwargs)

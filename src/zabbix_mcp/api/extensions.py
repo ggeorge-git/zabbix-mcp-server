@@ -25,6 +25,7 @@ They are registered as MCP tools directly via MCPServer decorators in server.py.
 from __future__ import annotations
 
 import base64
+# from curses.ascii import isdigit
 import json
 import logging
 import math
@@ -209,12 +210,14 @@ def graph_render(
                     skip_ssl.verify_mode = ssl.CERT_NONE
                     login_handlers.append(urllib.request.HTTPSHandler(context=skip_ssl))
                 login_opener = urllib.request.build_opener(*login_handlers)
-                login_form = urllib.parse.urlencode({
-                    "name": fe_user,
-                    "password": fe_pass,
-                    "autologin": "1",
-                    "enter": "Sign in",
-                }).encode("utf-8")
+                login_form = urllib.parse.urlencode(
+                    {
+                        "name": fe_user,
+                        "password": fe_pass,
+                        "autologin": "1",
+                        "enter": "Sign in",
+                    }
+                ).encode("utf-8")
                 login_url = f"{base_url}/index.php?login=1"
                 with login_opener.open(
                     urllib.request.Request(login_url, data=login_form),
@@ -265,11 +268,13 @@ def graph_render(
             )
 
         encoded = base64.b64encode(data).decode("ascii")
-        return json.dumps({
-            "image": f"data:image/png;base64,{encoded}",
-            "graphid": graphid,
-            "period": period,
-        })
+        return json.dumps(
+            {
+                "image": f"data:image/png;base64,{encoded}",
+                "graphid": graphid,
+                "period": period,
+            }
+        )
 
     except urllib.error.HTTPError as exc:
         # 401 / 403 typically means the cached frontend cookie is no
@@ -327,9 +332,7 @@ def anomaly_detect(
         hostgroupid = kwargs.get("hostgroupid")
         hostid = kwargs.get("hostid")
         if not hostgroupid and not hostid:
-            return _error_json(
-                "Either hostgroupid or hostid is required."
-            )
+            return _error_json("Either hostgroupid or hostid is required.")
 
         period = str(kwargs.get("period", "7d"))
         period_sec = _parse_period(period)
@@ -362,13 +365,17 @@ def anomaly_detect(
         host_ids = list(host_map.keys())
 
         # --- Fetch matching items ---
-        items = client_manager.call(server_name, "item.get", {
-            "output": ["itemid", "hostid", "key_", "name"],
-            "hostids": host_ids,
-            "search": {"key_": item_key},
-            "searchByAny": True,
-            "filter": {"status": 0},
-        })
+        items = client_manager.call(
+            server_name,
+            "item.get",
+            {
+                "output": ["itemid", "hostid", "key_", "name"],
+                "hostids": host_ids,
+                "search": {"key_": item_key},
+                "searchByAny": True,
+                "filter": {"status": 0},
+            },
+        )
         if not items:
             return _error_json(
                 f"No enabled items matching key '{item_key}' found on the selected hosts."
@@ -389,13 +396,17 @@ def anomaly_detect(
         # --- Fetch trend data per host ---
         host_averages: dict[str, float] = {}
         for hid, iid in host_item.items():
-            trends = client_manager.call(server_name, "trend.get", {
-                "output": ["clock", "value_avg", "num"],
-                "itemids": [iid],
-                "time_from": time_from,
-                "time_till": now,
-                "limit": 10000,
-            })
+            trends = client_manager.call(
+                server_name,
+                "trend.get",
+                {
+                    "output": ["clock", "value_avg", "num"],
+                    "itemids": [iid],
+                    "time_from": time_from,
+                    "time_till": now,
+                    "limit": 10000,
+                },
+            )
             if not trends:
                 continue
 
@@ -430,27 +441,31 @@ def anomaly_detect(
             for hid, avg_val in host_averages.items():
                 z_score = (avg_val - global_mean) / global_stddev
                 if abs(z_score) >= threshold:
-                    anomalies.append({
-                        "hostid": hid,
-                        "host": host_map[hid]["host"],
-                        "name": host_map[hid]["name"],
-                        "item": item_names.get(hid, item_key),
-                        "avg_value": round(avg_val, 4),
-                        "z_score": round(z_score, 4),
-                        "global_mean": round(global_mean, 4),
-                        "global_stddev": round(global_stddev, 4),
-                    })
+                    anomalies.append(
+                        {
+                            "hostid": hid,
+                            "host": host_map[hid]["host"],
+                            "name": host_map[hid]["name"],
+                            "item": item_names.get(hid, item_key),
+                            "avg_value": round(avg_val, 4),
+                            "z_score": round(z_score, 4),
+                            "global_mean": round(global_mean, 4),
+                            "global_stddev": round(global_stddev, 4),
+                        }
+                    )
 
         anomalies.sort(key=lambda a: abs(a["z_score"]), reverse=True)
 
-        return json.dumps({
-            "anomalies": anomalies,
-            "hosts_analyzed": len(host_averages),
-            "period": period,
-            "global_mean": round(global_mean, 4),
-            "global_stddev": round(global_stddev, 4),
-            "threshold": threshold,
-        })
+        return json.dumps(
+            {
+                "anomalies": anomalies,
+                "hosts_analyzed": len(host_averages),
+                "period": period,
+                "global_mean": round(global_mean, 4),
+                "global_stddev": round(global_stddev, 4),
+                "threshold": threshold,
+            }
+        )
 
     except ValueError as exc:
         return _error_json(str(exc))
@@ -504,23 +519,31 @@ def capacity_forecast(
         time_from = now - period_sec
 
         # --- Resolve host ---
-        hosts = client_manager.call(server_name, "host.get", {
-            "output": ["hostid", "host", "name"],
-            "hostids": [hostid],
-        })
+        hosts = client_manager.call(
+            server_name,
+            "host.get",
+            {
+                "output": ["hostid", "host", "name"],
+                "hostids": [hostid],
+            },
+        )
         if not hosts:
             return _error_json(f"Host with id '{hostid}' not found.")
         host_info = hosts[0]
 
         # --- Resolve item ---
-        items = client_manager.call(server_name, "item.get", {
-            "output": ["itemid", "key_", "name", "lastvalue", "units"],
-            "hostids": [hostid],
-            "search": {"key_": item_key},
-            "searchByAny": True,
-            "filter": {"status": 0},
-            "limit": 1,
-        })
+        items = client_manager.call(
+            server_name,
+            "item.get",
+            {
+                "output": ["itemid", "key_", "name", "lastvalue", "units"],
+                "hostids": [hostid],
+                "search": {"key_": item_key},
+                "searchByAny": True,
+                "filter": {"status": 0},
+                "limit": 1,
+            },
+        )
         if not items:
             return _error_json(
                 f"No enabled item matching key '{item_key}' found on host '{hostid}'."
@@ -528,13 +551,17 @@ def capacity_forecast(
         item = items[0]
 
         # --- Fetch trend data ---
-        trends = client_manager.call(server_name, "trend.get", {
-            "output": ["clock", "value_avg", "num"],
-            "itemids": [item["itemid"]],
-            "time_from": time_from,
-            "time_till": now,
-            "limit": 50000,
-        })
+        trends = client_manager.call(
+            server_name,
+            "trend.get",
+            {
+                "output": ["clock", "value_avg", "num"],
+                "itemids": [item["itemid"]],
+                "time_from": time_from,
+                "time_till": now,
+                "limit": 50000,
+            },
+        )
         if not trends:
             return _error_json(
                 f"No trend data available for item '{item_key}' on host "
@@ -557,8 +584,7 @@ def capacity_forecast(
         t0 = raw_points[0][0]
         # Normalise time to days from first data point
         points: list[tuple[float, float]] = [
-            ((clock - t0) / 86400.0, value)
-            for clock, value in raw_points
+            ((clock - t0) / 86400.0, value) for clock, value in raw_points
         ]
 
         # --- Linear regression (least squares) ---
@@ -615,21 +641,25 @@ def capacity_forecast(
             # Value is decreasing — threshold for a high value will not be hit
             days_until = None
 
-        return json.dumps({
-            "hostid": hostid,
-            "host": host_info["host"],
-            "name": host_info.get("name", host_info["host"]),
-            "item_key": item["key_"],
-            "item_name": item.get("name", item["key_"]),
-            "current_value": round(current_value, 4),
-            "daily_change": round(daily_change, 6),
-            "threshold": threshold,
-            "days_until_threshold": round(days_until, 1) if days_until is not None else None,
-            "forecast_date": forecast_date,
-            "data_points": n,
-            "r_squared": round(r_squared, 6),
-            "period": period,
-        })
+        return json.dumps(
+            {
+                "hostid": hostid,
+                "host": host_info["host"],
+                "name": host_info.get("name", host_info["host"]),
+                "item_key": item["key_"],
+                "item_name": item.get("name", item["key_"]),
+                "current_value": round(current_value, 4),
+                "daily_change": round(daily_change, 6),
+                "threshold": threshold,
+                "days_until_threshold": (
+                    round(days_until, 1) if days_until is not None else None
+                ),
+                "forecast_date": forecast_date,
+                "data_points": n,
+                "r_squared": round(r_squared, 6),
+                "period": period,
+            }
+        )
 
     except ValueError as exc:
         return _error_json(str(exc))
@@ -729,7 +759,9 @@ def item_threshold_search(
             if val is not None:
                 params[key] = val
 
-        items: list[dict[str, Any]] = client_manager.call(server_name, "item.get", params)
+        items: list[dict[str, Any]] = client_manager.call(
+            server_name, "item.get", params
+        )
         scanned = len(items)
 
         raw_gt = kwargs.get("lastvalue_gt")
@@ -767,12 +799,15 @@ def item_threshold_search(
         if result_limit is not None:
             matched = matched[: int(result_limit)]
 
-        return json.dumps({
-            "scanned": scanned,
-            "matched": total_matched,
-            "returned": len(matched),
-            "items": matched,
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "scanned": scanned,
+                "matched": total_matched,
+                "returned": len(matched),
+                "items": matched,
+            },
+            ensure_ascii=False,
+        )
 
     except Exception as exc:
         logger.exception("Unexpected error in item_threshold_search")
@@ -823,16 +858,22 @@ def _filter_active_problems(
     if not trigger_ids:
         return [], {}
 
-    triggers = client_manager.call(server_name, "trigger.get", {
-        "output": ["triggerid", "status"],
-        "triggerids": trigger_ids,
-        "selectHosts": ["hostid", "host", "name", "status"],
-        "filter": {"status": 0},  # enabled triggers only
-    })
+    triggers = client_manager.call(
+        server_name,
+        "trigger.get",
+        {
+            "output": ["triggerid", "status"],
+            "triggerids": trigger_ids,
+            "selectHosts": ["hostid", "host", "name", "status"],
+            "filter": {"status": 0},  # enabled triggers only
+        },
+    )
 
     host_by_trigger: dict[str, dict[str, str]] = {}
     for t in triggers:
-        enabled_hosts = [h for h in t.get("hosts", []) if str(h.get("status", "1")) == "0"]
+        enabled_hosts = [
+            h for h in t.get("hosts", []) if str(h.get("status", "1")) == "0"
+        ]
         if enabled_hosts:
             h = enabled_hosts[0]
             host_by_trigger[str(t["triggerid"])] = {
@@ -907,11 +948,99 @@ def problem_active_get(
             # to return `limit` valid rows when a chunk is on disabled hosts.
             "limit": max(limit * 4, limit + 50),
         }
-        for k in ("hostids", "groupids"):
-            if kwargs.get(k):
-                params[k] = kwargs[k]
 
-        problems: list[dict[str, Any]] = client_manager.call(server_name, "problem.get", params)
+        raw_hosts = kwargs.get("hosts") or kwargs.get("hostids")
+        if not raw_hosts and kwargs.get("host"):
+            raw_hosts = [kwargs["host"]]
+        elif isinstance(raw_hosts, str):
+            raw_hosts = [h.strip() for h in raw_hosts.split(",") if h.strip()]
+
+        if raw_hosts:
+            host_ids = []
+            names_to_lookup = []
+            for h in raw_hosts:
+                if str(h).isdigit():
+                    host_ids.append(str(h))
+                else:
+                    names_to_lookup.append(str(h))
+
+            if names_to_lookup:
+                # Query Zabbix for hostids by name or technical host
+                matches = client_manager.call(
+                    server_name,
+                    "host.get",
+                    {
+                        "output": ["hostid", "host", "name"],
+                        "filter": {"host": names_to_lookup},
+                    },
+                )
+                # If exact technical host didn't match all, try display name
+                found_names = {m["host"] for m in matches}
+                missing = [n for n in names_to_lookup if n not in found_names]
+                if missing:
+                    display_matches = client_manager.call(
+                        server_name,
+                        "host.get",
+                        {
+                            "output": ["hostid", "name"],
+                            "filter": {"name": missing},
+                        },
+                    )
+                    matches.extend(display_matches)
+
+                host_ids.extend([m["hostid"] for m in matches])
+
+            if host_ids:
+                params["hostids"] = list(set(host_ids))
+
+        raw_groups = kwargs.get("groups") or kwargs.get("groupids")
+        if not raw_groups and kwargs.get("group"):
+            raw_groups = [kwargs["group"]]
+        elif isinstance(raw_groups, str):
+            raw_groups = [g.strip() for g in raw_groups.split(",") if g.strip()]
+
+        if raw_groups:
+            group_ids = []
+            gnames_to_lookup = []
+            for g in raw_groups:
+                if str(g).isdigit():
+                    group_ids.append(str(g))
+                else:
+                    gnames_to_lookup.append(str(g))
+
+            if gnames_to_lookup:
+                matches = client_manager.call(
+                    server_name,
+                    "hostgroup.get",
+                    {
+                        "output": ["groupid", "name"],
+                        "filter": {"name": gnames_to_lookup},
+                    },
+                )
+                group_ids.extend([m["groupid"] for m in matches])
+
+            if group_ids:
+                params["groupids"] = list(set(group_ids))
+
+        search_query = kwargs.get("search") or kwargs.get("name")
+        if search_query:
+            params["search"] = {"name": str(search_query)}
+            params["searchWildcardsEnabled"] = True
+
+        raw_time_from = kwargs.get("time_from")
+        if raw_time_from is not None:
+            if isinstance(raw_time_from, int):
+                params["time_from"] = raw_time_from
+            elif isinstance(raw_time_from, str):
+                from zabbix_mcp.server import _try_parse_timestamp
+
+                parsed_ts = _try_parse_timestamp(raw_time_from)
+                if parsed_ts is not None:
+                    params["time_from"] = parsed_ts
+
+        problems: list[dict[str, Any]] = client_manager.call(
+            server_name, "problem.get", params
+        )
         total = len(problems)
 
         kept, host_map = _filter_active_problems(problems, client_manager, server_name)
@@ -935,11 +1064,14 @@ def problem_active_get(
                 "acknowledged": int(p.get("acknowledged", 0) or 0),
             })
 
-        return json.dumps({
-            "problems": enriched,
-            "count": len(enriched),
-            "filtered_out": total - len(kept),
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "problems": enriched,
+                "count": len(enriched),
+                "filtered_out": total - len(kept),
+            },
+            ensure_ascii=False,
+        )
 
     except Exception as exc:
         logger.exception("Unexpected error in problem_active_get")
@@ -991,44 +1123,111 @@ def host_status_get(
         host_id = kwargs.get("host_id")
         host_name = kwargs.get("host")
         if not host_id and not host_name:
-            return _error_json("host_status_get requires either host_id or host (the host name).")
+            return _error_json(
+                "host_status_get requires either host_id or host (the host name)."
+            )
 
         # Resolve host to a single record.
         if host_id:
-            hosts = client_manager.call(server_name, "host.get", {
-                "output": ["hostid", "host", "name", "status", "available", "description"],
-                "hostids": [str(host_id)],
-                "selectInterfaces": ["interfaceid", "ip", "dns", "port", "type", "main", "useip"],
-                "selectInventory": ["os", "hardware", "location"],
-            })
-        else:
-            hosts = client_manager.call(server_name, "host.get", {
-                "output": ["hostid", "host", "name", "status", "available", "description"],
-                "filter": {"host": host_name},
-                "selectInterfaces": ["interfaceid", "ip", "dns", "port", "type", "main", "useip"],
-                "selectInventory": ["os", "hardware", "location"],
-            })
-            if not hosts:
-                hosts = client_manager.call(server_name, "host.get", {
-                    "output": ["hostid", "host", "name", "status", "available", "description"],
-                    "search": {"host": host_name},
-                    "selectInterfaces": ["interfaceid", "ip", "dns", "port", "type", "main", "useip"],
+            hosts = client_manager.call(
+                server_name,
+                "host.get",
+                {
+                    "output": [
+                        "hostid",
+                        "host",
+                        "name",
+                        "status",
+                        "available",
+                        "description",
+                    ],
+                    "hostids": [str(host_id)],
+                    "selectInterfaces": [
+                        "interfaceid",
+                        "ip",
+                        "dns",
+                        "port",
+                        "type",
+                        "main",
+                        "useip",
+                    ],
                     "selectInventory": ["os", "hardware", "location"],
-                })
+                },
+            )
+        else:
+            hosts = client_manager.call(
+                server_name,
+                "host.get",
+                {
+                    "output": [
+                        "hostid",
+                        "host",
+                        "name",
+                        "status",
+                        "available",
+                        "description",
+                    ],
+                    "filter": {"host": host_name},
+                    "selectInterfaces": [
+                        "interfaceid",
+                        "ip",
+                        "dns",
+                        "port",
+                        "type",
+                        "main",
+                        "useip",
+                    ],
+                    "selectInventory": ["os", "hardware", "location"],
+                },
+            )
+            if not hosts:
+                hosts = client_manager.call(
+                    server_name,
+                    "host.get",
+                    {
+                        "output": [
+                            "hostid",
+                            "host",
+                            "name",
+                            "status",
+                            "available",
+                            "description",
+                        ],
+                        "search": {"host": host_name},
+                        "selectInterfaces": [
+                            "interfaceid",
+                            "ip",
+                            "dns",
+                            "port",
+                            "type",
+                            "main",
+                            "useip",
+                        ],
+                        "selectInventory": ["os", "hardware", "location"],
+                    },
+                )
         if not hosts:
-            return _error_json(f"No host matched the query (host_id={host_id!r}, host={host_name!r}).")
+            return _error_json(
+                f"No host matched the query (host_id={host_id!r}, host={host_name!r})."
+            )
         host = hosts[0]
 
         # Active problems on this host (severity Warning+, monitored only).
-        problems_raw = client_manager.call(server_name, "problem.get", {
-            "output": "extend",
-            "hostids": [host["hostid"]],
-            "severities": [2, 3, 4, 5],
-            "sortfield": "eventid",
-            "sortorder": "DESC",
-            "limit": 50,
-        })
-        kept_problems, host_map = _filter_active_problems(problems_raw, client_manager, server_name)
+        problems_raw = client_manager.call(
+            server_name,
+            "problem.get",
+            {
+                "output": "extend",
+                "hostids": [host["hostid"]],
+                "severities": [2, 3, 4, 5],
+                "sortfield": "eventid",
+                "sortorder": "DESC",
+                "limit": 50,
+            },
+        )
+        kept_problems, host_map = _filter_active_problems(
+            problems_raw, client_manager, server_name
+        )
         active_problems: list[dict[str, Any]] = []
         sev_count = {"warning": 0, "average": 0, "high": 0, "disaster": 0}
         zone = resolve_zone(client_manager, server_name)
@@ -1053,14 +1252,26 @@ def host_status_get(
         # with "Sorting by field 'lastclock' not allowed". Sort by
         # name so the LLM gets a stable order; the response still
         # carries lastclock so the model can read recency itself.
-        items = client_manager.call(server_name, "item.get", {
-            "output": ["itemid", "name", "key_", "lastvalue", "lastclock", "units", "value_type"],
-            "hostids": [host["hostid"]],
-            "filter": {"status": 0},  # enabled
-            "sortfield": "name",
-            "sortorder": "ASC",
-            "limit": 8,
-        })
+        items = client_manager.call(
+            server_name,
+            "item.get",
+            {
+                "output": [
+                    "itemid",
+                    "name",
+                    "key_",
+                    "lastvalue",
+                    "lastclock",
+                    "units",
+                    "value_type",
+                ],
+                "hostids": [host["hostid"]],
+                "filter": {"status": 0},  # enabled
+                "sortfield": "name",
+                "sortorder": "ASC",
+                "limit": 8,
+            },
+        )
         last_values = []
         for it in items:
             last_values.append({
@@ -1129,37 +1340,59 @@ def hostgroup_overview_get(
         top_n = int(kwargs.get("top_n", 5))
 
         if not groupid and not group:
-            return _error_json("hostgroup_overview_get requires either groupid or group.")
+            return _error_json(
+                "hostgroup_overview_get requires either groupid or group."
+            )
 
         if groupid:
-            groups = client_manager.call(server_name, "hostgroup.get", {
-                "output": ["groupid", "name"],
-                "groupids": [str(groupid)],
-            })
+            groups = client_manager.call(
+                server_name,
+                "hostgroup.get",
+                {
+                    "output": ["groupid", "name"],
+                    "groupids": [str(groupid)],
+                },
+            )
         else:
-            groups = client_manager.call(server_name, "hostgroup.get", {
-                "output": ["groupid", "name"],
-                "filter": {"name": group},
-            })
+            groups = client_manager.call(
+                server_name,
+                "hostgroup.get",
+                {
+                    "output": ["groupid", "name"],
+                    "filter": {"name": group},
+                },
+            )
         if not groups:
-            return _error_json(f"No host group matched (groupid={groupid!r}, group={group!r}).")
+            return _error_json(
+                f"No host group matched (groupid={groupid!r}, group={group!r})."
+            )
         g = groups[0]
 
-        hosts = client_manager.call(server_name, "host.get", {
-            "output": ["hostid", "host", "name", "status"],
-            "groupids": [g["groupid"]],
-        })
+        hosts = client_manager.call(
+            server_name,
+            "host.get",
+            {
+                "output": ["hostid", "host", "name", "status"],
+                "groupids": [g["groupid"]],
+            },
+        )
         host_count = len(hosts)
         enabled = sum(1 for h in hosts if str(h.get("status", "1")) == "0")
         host_index = {h["hostid"]: h for h in hosts}
 
-        problems_raw = client_manager.call(server_name, "problem.get", {
-            "output": "extend",
-            "hostids": list(host_index.keys()),
-            "severities": [2, 3, 4, 5],
-            "limit": 1000,
-        })
-        kept_problems, host_map = _filter_active_problems(problems_raw, client_manager, server_name)
+        problems_raw = client_manager.call(
+            server_name,
+            "problem.get",
+            {
+                "output": "extend",
+                "hostids": list(host_index.keys()),
+                "severities": [2, 3, 4, 5],
+                "limit": 1000,
+            },
+        )
+        kept_problems, host_map = _filter_active_problems(
+            problems_raw, client_manager, server_name
+        )
 
         sev_count = {"warning": 0, "average": 0, "high": 0, "disaster": 0}
         per_host: dict[str, int] = {}
@@ -1184,15 +1417,18 @@ def hostgroup_overview_get(
             for hid, cnt in top_hosts
         ]
 
-        return json.dumps({
-            "group": {"groupid": g["groupid"], "name": g["name"]},
-            "host_count": host_count,
-            "enabled_host_count": enabled,
-            "hosts_with_problems_count": len(per_host),
-            "active_problem_count_by_severity": sev_count,
-            "active_problem_count": sum(sev_count.values()),
-            "top_hosts_by_problem_count": top_hosts_pretty,
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "group": {"groupid": g["groupid"], "name": g["name"]},
+                "host_count": host_count,
+                "enabled_host_count": enabled,
+                "hosts_with_problems_count": len(per_host),
+                "active_problem_count_by_severity": sev_count,
+                "active_problem_count": sum(sev_count.values()),
+                "top_hosts_by_problem_count": top_hosts_pretty,
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:
         logger.exception("Unexpected error in hostgroup_overview_get")
         return _error_json(f"Unexpected error: {exc}")
@@ -1213,6 +1449,7 @@ def infrastructure_summary_get(
     """
     try:
         top_n = int(kwargs.get("top_n", 5))
+
         # Counts via countOutput=true - one cheap query each. Zabbix
         # returns the count as a string ("1753"). Note: output="count"
         # is NOT a valid API value - Zabbix silently ignores it and
@@ -1235,13 +1472,26 @@ def infrastructure_summary_get(
         template_count = _count("template.get")
 
         # Active problems broken down by severity.
-        problems_raw = client_manager.call(server_name, "problem.get", {
-            "output": "extend",
-            "severities": [0, 1, 2, 3, 4, 5],
-            "limit": 5000,
-        })
-        kept, host_map = _filter_active_problems(problems_raw, client_manager, server_name)
-        sev_count = {"not_classified": 0, "information": 0, "warning": 0, "average": 0, "high": 0, "disaster": 0}
+        problems_raw = client_manager.call(
+            server_name,
+            "problem.get",
+            {
+                "output": "extend",
+                "severities": [0, 1, 2, 3, 4, 5],
+                "limit": 5000,
+            },
+        )
+        kept, host_map = _filter_active_problems(
+            problems_raw, client_manager, server_name
+        )
+        sev_count = {
+            "not_classified": 0,
+            "information": 0,
+            "warning": 0,
+            "average": 0,
+            "high": 0,
+            "disaster": 0,
+        }
         per_host: dict[str, int] = {}
         for p in kept:
             sev = str(p.get("severity", "0"))
@@ -1257,10 +1507,14 @@ def infrastructure_summary_get(
         if per_host:
             top = sorted(per_host.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
             ids = [h for h, _ in top]
-            host_rows = client_manager.call(server_name, "host.get", {
-                "output": ["hostid", "host", "name"],
-                "hostids": ids,
-            })
+            host_rows = client_manager.call(
+                server_name,
+                "host.get",
+                {
+                    "output": ["hostid", "host", "name"],
+                    "hostids": ids,
+                },
+            )
             host_lookup = {h["hostid"]: h for h in host_rows}
             top_hosts_pretty = [
                 {
@@ -1272,16 +1526,19 @@ def infrastructure_summary_get(
                 for hid, cnt in top
             ]
 
-        return json.dumps({
-            "host_count": host_count,
-            "enabled_host_count": host_enabled,
-            "item_count": item_count,
-            "trigger_count": trigger_count,
-            "template_count": template_count,
-            "active_problem_count_by_severity": sev_count,
-            "active_problem_count": sum(sev_count.values()),
-            "top_hosts_by_problem_count": top_hosts_pretty,
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "host_count": host_count,
+                "enabled_host_count": host_enabled,
+                "item_count": item_count,
+                "trigger_count": trigger_count,
+                "template_count": template_count,
+                "active_problem_count_by_severity": sev_count,
+                "active_problem_count": sum(sev_count.values()),
+                "top_hosts_by_problem_count": top_hosts_pretty,
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:
         logger.exception("Unexpected error in infrastructure_summary_get")
         return _error_json(f"Unexpected error: {exc}")
@@ -1320,25 +1577,55 @@ def item_history_summary_get(
         host = kwargs.get("host")
         key = kwargs.get("key")
         if not itemid and not (host and key):
-            return _error_json("item_history_summary_get requires itemid OR (host + key).")
+            return _error_json(
+                "item_history_summary_get requires itemid OR (host + key)."
+            )
 
         if itemid:
-            items = client_manager.call(server_name, "item.get", {
-                "output": ["itemid", "name", "key_", "lastvalue", "units", "value_type", "hostid"],
-                "itemids": [str(itemid)],
-            })
+            items = client_manager.call(
+                server_name,
+                "item.get",
+                {
+                    "output": [
+                        "itemid",
+                        "name",
+                        "key_",
+                        "lastvalue",
+                        "units",
+                        "value_type",
+                        "hostid",
+                    ],
+                    "itemids": [str(itemid)],
+                },
+            )
         else:
-            host_rows = client_manager.call(server_name, "host.get", {
-                "output": ["hostid"],
-                "filter": {"host": host},
-            })
+            host_rows = client_manager.call(
+                server_name,
+                "host.get",
+                {
+                    "output": ["hostid"],
+                    "filter": {"host": host},
+                },
+            )
             if not host_rows:
                 return _error_json(f"No host matched host={host!r}.")
-            items = client_manager.call(server_name, "item.get", {
-                "output": ["itemid", "name", "key_", "lastvalue", "units", "value_type", "hostid"],
-                "hostids": [host_rows[0]["hostid"]],
-                "filter": {"key_": key},
-            })
+            items = client_manager.call(
+                server_name,
+                "item.get",
+                {
+                    "output": [
+                        "itemid",
+                        "name",
+                        "key_",
+                        "lastvalue",
+                        "units",
+                        "value_type",
+                        "hostid",
+                    ],
+                    "hostids": [host_rows[0]["hostid"]],
+                    "filter": {"key_": key},
+                },
+            )
         if not items:
             return _error_json("No item matched the query.")
         it = items[0]
@@ -1348,15 +1635,19 @@ def item_history_summary_get(
             history = []
             stats = None
         else:
-            history = client_manager.call(server_name, "history.get", {
-                "output": "extend",
-                "history": value_type,
-                "itemids": [it["itemid"]],
-                "time_from": time_from,
-                "sortfield": "clock",
-                "sortorder": "DESC",
-                "limit": limit,
-            })
+            history = client_manager.call(
+                server_name,
+                "history.get",
+                {
+                    "output": "extend",
+                    "history": value_type,
+                    "itemids": [it["itemid"]],
+                    "time_from": time_from,
+                    "sortfield": "clock",
+                    "sortorder": "DESC",
+                    "limit": limit,
+                },
+            )
             values: list[float] = []
             for h in history:
                 try:
@@ -1375,23 +1666,26 @@ def item_history_summary_get(
             else:
                 stats = None
 
-        return json.dumps({
-            "item": {
-                "itemid": it.get("itemid", ""),
-                "hostid": it.get("hostid", ""),
-                "name": it.get("name", ""),
-                "key": it.get("key_", ""),
-                "units": it.get("units", ""),
-                "lastvalue": it.get("lastvalue", ""),
-                "value_type": value_type,
+        return json.dumps(
+            {
+                "item": {
+                    "itemid": it.get("itemid", ""),
+                    "hostid": it.get("hostid", ""),
+                    "name": it.get("name", ""),
+                    "key": it.get("key_", ""),
+                    "units": it.get("units", ""),
+                    "lastvalue": it.get("lastvalue", ""),
+                    "value_type": value_type,
+                },
+                "period": period,
+                "stats": stats,
+                "history": [
+                    {"clock": h.get("clock", ""), "value": h.get("value", "")}
+                    for h in (history or [])
+                ],
             },
-            "period": period,
-            "stats": stats,
-            "history": [
-                {"clock": h.get("clock", ""), "value": h.get("value", "")}
-                for h in (history or [])
-            ],
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
     except ValueError as exc:
         return _error_json(str(exc))
     except Exception as exc:
